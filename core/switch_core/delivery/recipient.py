@@ -593,7 +593,7 @@ class AgentRecipient:
             else None
         )
         own_event = _message_own_event(
-            meta, event, thread_id, self.agent.id, sender_role
+            meta, event, thread_id, self.agent.id, sender_role, routed=False
         )
 
         async def after(row: InboundEvent) -> None:
@@ -664,7 +664,62 @@ class AgentRecipient:
         sender_role = await self._sender_role(session, event.sender, event.content)
         return Delivery(
             own_event=_message_own_event(
-                meta, event, event.thread_root_id, self.agent.id, sender_role
+                meta,
+                event,
+                event.thread_root_id,
+                self.agent.id,
+                sender_role,
+                routed=False,
+            ),
+            after=after,
+        )
+
+    async def admits(self, session: AsyncSession, event: InboundMessage) -> bool:
+        """Whether the agent's addressing policy and budget let the sender of
+        `event` through, as they would for a mention, without a refusal: the
+        decision service's candidates are the agents this admits."""
+        agent = await self._fresh_agent(session)
+        return (await self._gate_addressed(session, agent, event, self._meta)).addressed
+
+    async def decide_routed(
+        self, session: AsyncSession, event: InboundMessage
+    ) -> Delivery:
+        """The agent's own event for a message the decision service picked it
+        to answer (`delivery/decision.py`), decided once the message has
+        committed: when its addressing policy and budget still let the sender
+        through.
+
+        As quiet as a follow-up, for the same reason: the sender asked no one
+        in particular. A refusal is logged rather than posted, and an agent
+        with no session gets no "unavailable" notice.
+        """
+        meta = self._meta
+        agent = await self._fresh_agent(session)
+        gate = await self._gate_addressed(session, agent, event, meta)
+        if not gate.addressed:
+            logger.info(
+                "Decision routing: room=%s message=%s agent=%s outcome="
+                "dropped_not_permitted reason=the sender may no longer instruct "
+                "this agent, or it is over budget",
+                meta.room_id,
+                event.event_id,
+                agent.name,
+            )
+            return NOTHING
+
+        async def after(row: InboundEvent) -> None:
+            assert isinstance(row, InboundMessage)
+            await self._after_follow_up(row)
+
+        sender_role = await self._sender_role(session, event.sender, event.content)
+        return Delivery(
+            own_event=_message_own_event(
+                meta,
+                event,
+                event.thread_root_id,
+                self.agent.id,
+                sender_role,
+                routed=True,
             ),
             after=after,
         )
@@ -1782,9 +1837,12 @@ def _message_own_event(
     thread_id: str | None,
     agent_id: str,
     sender_role: str | None,
+    *,
+    routed: bool,
 ) -> Callable[[InboundEvent], OwnEvent]:
     """How an agent's own event for a message is built once the message is
-    written."""
+    written. `routed` marks a message the decision service picked the agent
+    to answer."""
     sender_name = event.sender_name
     if not sender_name:
         sender_name = event.sender
@@ -1806,6 +1864,7 @@ def _message_own_event(
             thread_id=thread_id,
             opening_message=opening_message_for(meta, agent_id),
             sender_role=sender_role,
+            routed=routed,
         )
         # Serialising runs once per agent per message, so only when it will
         # be seen.

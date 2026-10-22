@@ -239,6 +239,10 @@ class MessagePayload(BaseModel):
     # arrived: "owner", "admin" or "member". None for an agent, the platform,
     # or a person no Switch user has claimed.
     sender_role: str | None = None
+    # True when the message tagged nobody and the decision service picked
+    # this agent to answer it (`delivery/decision.py`). Such a message is
+    # always addressed, so every host wakes for it.
+    routed: bool = False
 
 
 class CommandPayload(BaseModel):
