@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from switch_core.db.models import User
+from switch_core.db.models import TenantMember, User
 from switch_core.db.stores.user_store import UserStore
 from switch_core.gateway import dependencies as gw_deps
 from switch_core.gateway.auth import create_jwt
@@ -195,9 +195,14 @@ class TestCreateUserOverHttp:
         assert [e["loc"] for e in response.json()["detail"]] == [["body", "role"]]
         assert await _emails_like(session_factory, "ed@example.invalid") == []
 
-    @pytest.mark.parametrize("role", ["user", "admin"])
-    async def test_a_known_role_is_stored_as_given(
-        self, session_factory: async_sessionmaker[AsyncSession], role: str
+    @pytest.mark.parametrize(
+        ("role", "membership_role"), [("user", "member"), ("admin", "owner")]
+    )
+    async def test_a_known_role_is_stored_with_its_membership(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        role: str,
+        membership_role: str,
     ) -> None:
         app = _app(session_factory)
         async with await _admin_client(session_factory, app) as client:
@@ -217,7 +222,14 @@ class TestCreateUserOverHttp:
             stored = await session.scalar(
                 select(User.role).where(User.email == "fay@example.invalid")
             )
+            memberships = await session.scalars(
+                select(TenantMember.role).where(
+                    TenantMember.user_id == response.json()["id"]
+                )
+            )
+            membership_roles = list(memberships)
         assert stored == role
+        assert membership_roles == [membership_role]
 
 
 class TestCreateUserSchemaValidation:

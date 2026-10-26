@@ -158,7 +158,9 @@ version of their own to them without also giving them a release of their own.
   it, and had no operator rights. Anything other than `user` or `admin` is now
   a 422 and creates nothing. The Add User dialog offers only those two, so
   only scripts calling the API were affected. Accounts already stored with
-  another role are left as they are, and are treated as ordinary users.
+  another role are left as they are, still listed with that role and still
+  treated as ordinary users; `SELECT id, email, role FROM users WHERE role
+  NOT IN ('user', 'admin')` finds them.
 - **Every way of setting a password now applies the same rules.** Signup
   already required 8 characters and at most 72 bytes. Changing your own
   password checked only the 8 characters, and an admin creating a user checked
