@@ -151,6 +151,14 @@ version of their own to them without also giving them a release of their own.
   Existing duplicates are left as they are and can be reached by id.
 
 #### Fixed
+- **Creating a user refuses a role the server does not understand.** An
+  account is a user or an admin, and only the exact role `admin` grants
+  operator rights. `POST /users` accepted any role string, so `Admin` or
+  `owner` created an account that was shown with that role, was stored with
+  it, and had no operator rights. Anything other than `user` or `admin` is now
+  a 422 and creates nothing. The Add User dialog offers only those two, so
+  only scripts calling the API were affected. Accounts already stored with
+  another role are left as they are, and are treated as ordinary users.
 - **Every way of setting a password now applies the same rules.** Signup
   already required 8 characters and at most 72 bytes. Changing your own
   password checked only the 8 characters, and an admin creating a user checked

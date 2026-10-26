@@ -1,12 +1,14 @@
 """Admin user creation (POST /users): the same password and address rules as
-signup.
+signup, and only the roles the server understands.
 
 bcrypt reads only the first 72 bytes of a password, so a longer one would be
 stored as a prefix of itself; the request schema refuses it instead, and
 refuses anything under 8 characters. The address is normalised the way signup
 normalises it, so the same address means the same account whichever way it
 was created (`SignupRequest` shares the constraints, and `test_signup.py`
-covers its HTTP behaviour end to end).
+covers its HTTP behaviour end to end). The role is "user" or "admin" and
+nothing else: only the exact string "admin" grants operator rights, so any
+other value would create an account that claims a role it does not have.
 
 The HTTP tests drive the real auth router against real Postgres, as
 `test_change_password.py` does; the schema tests need no database.
@@ -173,6 +175,50 @@ class TestCreateUserOverHttp:
             "di@example.invalid"
         ]
 
+    @pytest.mark.parametrize("role", ["Admin", "owner", "operator", ""])
+    async def test_an_unknown_role_is_422_and_creates_nothing(
+        self, session_factory: async_sessionmaker[AsyncSession], role: str
+    ) -> None:
+        app = _app(session_factory)
+        async with await _admin_client(session_factory, app) as client:
+            response = await client.post(
+                "/users",
+                json={
+                    "name": "Ed",
+                    "email": "ed@example.invalid",
+                    "password": "good-pass-1",
+                    "role": role,
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        assert [e["loc"] for e in response.json()["detail"]] == [["body", "role"]]
+        assert await _emails_like(session_factory, "ed@example.invalid") == []
+
+    @pytest.mark.parametrize("role", ["user", "admin"])
+    async def test_a_known_role_is_stored_as_given(
+        self, session_factory: async_sessionmaker[AsyncSession], role: str
+    ) -> None:
+        app = _app(session_factory)
+        async with await _admin_client(session_factory, app) as client:
+            response = await client.post(
+                "/users",
+                json={
+                    "name": "Fay",
+                    "email": "fay@example.invalid",
+                    "password": "good-pass-1",
+                    "role": role,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["role"] == role
+        async with session_factory() as session:
+            stored = await session.scalar(
+                select(User.role).where(User.email == "fay@example.invalid")
+            )
+        assert stored == role
+
 
 class TestCreateUserSchemaValidation:
     def test_email_is_normalised(self) -> None:
@@ -186,6 +232,16 @@ class TestCreateUserSchemaValidation:
             name="Ada", email="ada@example.com", password="good-pass-1"
         )
         assert request.role == "user"
+
+    def test_unknown_role_rejected(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            CreateUserRequest(
+                name="Ada",
+                email="ada@example.com",
+                password="good-pass-1",
+                role="Admin",
+            )
+        assert [e["type"] for e in exc_info.value.errors()] == ["literal_error"]
 
     def test_short_password_rejected(self) -> None:
         with pytest.raises(ValidationError) as exc_info:
