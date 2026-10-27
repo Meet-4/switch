@@ -1131,6 +1131,7 @@ async def run(config: SwitchConfig, process_id: str) -> None:
     # Changes to people's chats made in another process wake the Console
     # streams held here too (`chats/signals.py`).
     ChatSignals(service=chat_service, bus=signal_bus)
+    room_service.use_chats(chat_service)
     room_service.on_room_agents_changed(chat_service.sync_room)
     protocol.set_room_agents_listener(room_service.room_agents_changed)
     protocol.set_agent_profile_listener(chat_service.agent_changed)
@@ -1495,6 +1496,7 @@ async def run(config: SwitchConfig, process_id: str) -> None:
     # same missing client.
     async with boot_lock(config):
         await room_service.reconcile_room_clients()
+        await room_service.retire_mattermost_bridges()
 
     logger.info(
         "Switch is running on http://%s:%d", config.server_host, config.server_port

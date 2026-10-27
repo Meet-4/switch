@@ -280,7 +280,7 @@ async def _make_bridge(session: AsyncSession, *, is_default: bool = False) -> st
     session.add(client)
     await session.flush()
     bridge = CollaborationBridge(
-        type="mattermost",
+        type="slack",
         display_name="MM",
         client_id=client.id,
         status="active",

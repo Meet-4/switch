@@ -191,6 +191,9 @@ async def chat_summary(
         ).scalars()
     }
     bridge = await _bridge(session, room)
+    # A retired bridge is no connection to label the chat with.
+    if bridge is not None and bridge.status != "active":
+        bridge = None
     member_user_ids = sorted(
         user_id
         for user_id in (

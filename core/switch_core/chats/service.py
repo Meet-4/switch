@@ -71,6 +71,7 @@ from switch_core.db.models import (
     Message,
     MessageAttachment,
     Room,
+    TenantMember,
     UsageMetric,
     User,
     require_tenant_id,
@@ -115,6 +116,9 @@ MembershipWatcher = Callable[[list[str] | None], None]
 
 # Fixed so the ids derived from it are stable across processes and releases.
 _CHATS_NAMESPACE = uuid.UUID("6f1d3c2e-8a4b-4f5e-9c7d-2b1a0e9f8d7c")
+
+# A typed `!command args`, as the platform bridges read one: "!!!" and "! hi" stay text.
+_TYPED_COMMAND = re.compile(r"^\s*!([a-z][a-z0-9-]*)\b(.*)", re.DOTALL)
 
 
 class ChatError(Exception):
@@ -619,8 +623,9 @@ class ChatService:
         return list(result.scalars().all())
 
     async def stream_rooms(self, session: AsyncSession, user_id: str) -> list[Room]:
-        """The caller's member rooms that are chats: unarchived, and either
-        holding an agent or started in Switch Console (which may have none)."""
+        """The caller's member rooms that are chats: unarchived, and holding an
+        agent, started in Switch Console, or moved there off a retired bridge
+        (either of which may have none)."""
         client = await self.member_client(session, user_id)
         if client is None:
             return []
@@ -633,6 +638,7 @@ class ChatService:
                 or_(
                     exists().where(room_agents.c.room_id == Room.id),
                     Room.metadata_.has_key("chat_operation_id"),
+                    Room.metadata_.has_key("retired_bridge"),
                 ),
             )
             .order_by(Room.created_at)
@@ -869,9 +875,15 @@ class ChatService:
             target = await self._require_tenant_member(
                 session, tenant_id, target_user_id
             )
+        return await self.join_member(tenant_id, room.id, target)
+
+    async def join_member(self, tenant_id: str, room_id: str, target: User) -> Room:
+        """Put a tenant member's member client in the room, with no check on
+        who asks: the caller has already authorised the join."""
+        target_user_id = target.id
         client = await self.member_actor(tenant_id, target)
         async with tenant_session(self.session_factory, tenant_id) as session:
-            room = await self._locked_room(session, room.id)
+            room = await self._locked_room(session, room_id)
             # The creator is the direct chat's own person; anyone else makes a group.
             if target_user_id not in (room.created_by, room.owner_id):
                 await self._make_group(session, room)
@@ -887,6 +899,50 @@ class ChatService:
             member_ids = [member.id for member, _ in await self.members(session, room)]
         self._memberships_changed(tenant_id, member_ids, [room.id])
         return room
+
+    async def join_people(
+        self,
+        tenant_id: str,
+        room_id: str,
+        *,
+        user_names: list[str],
+        user_ids: list[str],
+    ) -> list[str]:
+        """Put people in a room that has no messaging app, for a caller already
+        authorised to say who is in it. Returns the names that did not make it.
+
+        A name is a tenant member's Switch name or email, exactly; one that
+        matches nobody, or more than one person, is returned rather than
+        guessed. `user_ids` are people the room is for without being named —
+        its creator — and are skipped when they are not a person in the tenant.
+        """
+        async with tenant_session(self.session_factory, tenant_id) as session:
+            members = [
+                user
+                for user in (
+                    await session.execute(
+                        select(User)
+                        .join(TenantMember, TenantMember.user_id == User.id)
+                        .where(TenantMember.tenant_id == tenant_id)
+                    )
+                ).scalars()
+                if not is_bootstrap_owner(user)
+            ]
+        targets = {user.id: user for user in members if user.id in user_ids}
+        unresolved: list[str] = []
+        for name in user_names:
+            matches = [
+                user
+                for user in members
+                if user.name == name or user.email.lower() == name.lower()
+            ]
+            if len(matches) == 1:
+                targets[matches[0].id] = matches[0]
+            else:
+                unresolved.append(name)
+        for user in targets.values():
+            await self.join_member(tenant_id, room_id, user)
+        return unresolved
 
     async def remove_member(
         self, tenant_id: str, actor: User, room_id: str, target_user_id: str
@@ -1522,26 +1578,31 @@ class ChatService:
                 for upload_id in upload_ids
             ]
             root = await self._thread_root(session, room, thread_root_id)
+            typed_command = None if uploads else _TYPED_COMMAND.match(body)
             shift = 0
-            if mentions:
+            if mentions and typed_command is None:
                 written = body
                 body = await self._with_mentions(session, room, mentions, body)
                 if body != written:
                     shift = _utf16_len(body) - _utf16_len(written)
-            named_people = await self._named_people(
-                session,
-                room,
-                people,
-                mentions,
-                [
-                    text[1:]
-                    for text, span in zip(typed, mention_spans, strict=True)
-                    if span.kind == "user"
-                ],
-                [
-                    {**span.model_dump(), "offset": span.offset + shift}
-                    for span in mention_spans
-                ],
+            named_people = (
+                None
+                if typed_command
+                else await self._named_people(
+                    session,
+                    room,
+                    people,
+                    mentions,
+                    [
+                        text[1:]
+                        for text, span in zip(typed, mention_spans, strict=True)
+                        if span.kind == "user"
+                    ],
+                    [
+                        {**span.model_dump(), "offset": span.offset + shift}
+                        for span in mention_spans
+                    ],
+                )
             )
 
             if not await self._claim(
@@ -1559,33 +1620,48 @@ class ChatService:
                 self._require_same(operation, "send", payload_hash)
                 return room, await self._posted(session, room, operation)
 
-            contents = _parts(
-                body,
-                uploads,
-                sender_name=user.name,
-                thread_root_id=root,
-                group_id=str(
-                    uuid.uuid5(
-                        _CHATS_NAMESPACE,
-                        f"{tenant_id}:{client.id}:{room.id}:{request_id}",
+            if typed_command is not None:
+                posted = [
+                    _command_row(
+                        room,
+                        client,
+                        user,
+                        command=typed_command[1],
+                        args=typed_command[2].strip(),
+                        thread_root_id=root,
+                        client_txn_id=f"{request_id}:0",
                     )
-                ),
-            )
-            if named_people is not None:
-                contents[0][MENTIONS_KEY] = named_people
-            posted: list[Message] = []
-            routed: list[Routed] = []
-            for index, content in enumerate(contents):
-                message = message_row(
-                    room_id=room.id,
-                    event_id=new_event_id(),
-                    sender_id=client.transport_user_id,
-                    sender_client_id=client.id,
+                ]
+            else:
+                contents = _parts(
+                    body,
+                    uploads,
                     sender_name=user.name,
-                    event_type=MESSAGE_EVENT_TYPE,
-                    content=content,
-                    client_txn_id=f"{request_id}:{index}",
+                    thread_root_id=root,
+                    group_id=str(
+                        uuid.uuid5(
+                            _CHATS_NAMESPACE,
+                            f"{tenant_id}:{client.id}:{room.id}:{request_id}",
+                        )
+                    ),
                 )
+                if named_people is not None:
+                    contents[0][MENTIONS_KEY] = named_people
+                posted = [
+                    message_row(
+                        room_id=room.id,
+                        event_id=new_event_id(),
+                        sender_id=client.transport_user_id,
+                        sender_client_id=client.id,
+                        sender_name=user.name,
+                        event_type=MESSAGE_EVENT_TYPE,
+                        content=content,
+                        client_txn_id=f"{request_id}:{index}",
+                    )
+                    for index, content in enumerate(contents)
+                ]
+            routed: list[Routed] = []
+            for message in posted:
                 routed.append(
                     await self._router.store(
                         session,
@@ -1593,10 +1669,9 @@ class ChatService:
                         room_id=room.id,
                         transport_room_id=room.transport_room_id,
                         message=message,
-                        attachments=attachments_in(content),
+                        attachments=attachments_in(message.content),
                     )
                 )
-                posted.append(message)
             await self._usage_store.record(
                 session,
                 tenant_id=tenant_id,
@@ -1617,11 +1692,15 @@ class ChatService:
             await session.commit()
         for each in routed:
             each.committed()
-        for content in contents:
-            metrics().increment(
-                MESSAGES_SENT,
-                {"kind": "media" if "url" in content else "message", "actor": "human"},
+        for message in posted:
+            kind = (
+                "event"
+                if message.event_type == COMMAND_EVENT_TYPE
+                else "media"
+                if "url" in message.content
+                else "message"
             )
+            metrics().increment(MESSAGES_SENT, {"kind": kind, "actor": "human"})
         return room, posted
 
     async def control(
@@ -1687,27 +1766,22 @@ class ChatService:
                 self._require_same(operation, "control", payload_hash)
                 return str((operation.result or {})["commandId"])
 
-            command_id = new_event_id()
+            row = _command_row(
+                room,
+                client,
+                user,
+                command=command,
+                args=f"@{agent.name}",
+                thread_root_id=None,
+                client_txn_id=request_id,
+            )
+            command_id = row.transport_event_id
             routed = await self._router.store(
                 session,
                 tenant_id=tenant_id,
                 room_id=room.id,
                 transport_room_id=room.transport_room_id,
-                message=message_row(
-                    room_id=room.id,
-                    event_id=command_id,
-                    sender_id=client.transport_user_id,
-                    sender_client_id=client.id,
-                    sender_name=user.name,
-                    event_type=COMMAND_EVENT_TYPE,
-                    content={
-                        "command": command,
-                        "args": f"@{agent.name}",
-                        "user_id": client.transport_user_id,
-                        "user_name": user.name,
-                    },
-                    client_txn_id=request_id,
-                ),
+                message=row,
                 attachments=[],
             )
             await session.execute(
@@ -1873,6 +1947,38 @@ class ChatService:
         if not prefix:
             return body
         return f"{prefix} {body}" if body else prefix
+
+
+def _command_row(
+    room: Room,
+    client: Client,
+    user: User,
+    *,
+    command: str,
+    args: str,
+    thread_root_id: str | None,
+    client_txn_id: str,
+) -> Message:
+    """The `com.switch.command` row a platform bridge writes for a typed
+    command, written for the user's member client."""
+    content: dict[str, object] = {
+        "command": command,
+        "args": args,
+        "user_id": client.transport_user_id,
+        "user_name": user.name,
+    }
+    if thread_root_id is not None:
+        content["m.relates_to"] = {"rel_type": "m.thread", "event_id": thread_root_id}
+    return message_row(
+        room_id=room.id,
+        event_id=new_event_id(),
+        sender_id=client.transport_user_id,
+        sender_client_id=client.id,
+        sender_name=user.name,
+        event_type=COMMAND_EVENT_TYPE,
+        content=content,
+        client_txn_id=client_txn_id,
+    )
 
 
 def _may_use(agent: Agent, user: User, *, room_id: str, group_id: str | None) -> bool:

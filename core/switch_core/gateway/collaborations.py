@@ -829,7 +829,7 @@ async def claim_bridge_identity(
     """Claim a platform identity for a Switch user (CHOO-2137).
 
     This is what makes owner-only addressing enforceable: until the person
-    behind a Slack or Mattermost account is known to be a particular Switch
+    behind a Slack or Discord account is known to be a particular Switch
     user, an owner-scoped rule can never recognise them.
 
     Claiming one for someone else is an admin action; claiming one for

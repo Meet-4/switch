@@ -865,18 +865,3 @@ async def test_a_v2_template_with_its_room_off_creates_the_agent_alone(managed):
         ).scalar_one()
     assert agent.addressing_policy is None
     assert await _rooms(managed) == []
-
-
-@pytest.mark.asyncio
-async def test_users_with_no_messaging_app_are_refused_before_any_agent(managed):
-    template_id = await _stored(
-        managed,
-        V2_EXPERT.replace(
-            "    agents: [expert]\n", '    agents: [expert]\n    users: ["ada"]\n'
-        ),
-        kind="agent",
-    )
-
-    with pytest.raises(ValueError, match="on no messaging app"):
-        await _as(managed["agent_id"], run_template, template_id=template_id)
-    assert managed["management"].created == []

@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
+from switch_core.addressing import allows_on_behalf_of, parse_policy
 from switch_core.agent_display_name import (
     agent_label,
     agent_label_with_identifier,
@@ -28,6 +29,7 @@ from switch_core.bridges.agent.protocol.types import (
     AgentStatus,
     CommandPayload,
 )
+from switch_core.chats import MEMBER_CLIENT_TYPE
 from switch_core.clients.admin_messages import AdminMessageType
 from switch_core.clients.mentions import mention_tokens as _mention_tokens
 from switch_core.db.audit import AuditAction, record_audit_event
@@ -1078,7 +1080,8 @@ async def _cmd_invite(
         return
     token = tokens[0]
 
-    async with client.session_factory() as session:
+    host = cast("CommandConsumer", client)
+    async with tenant_session(host.session_factory, host.tenant_id) as session:
         # Resolve registry-wide (not room-scoped): the agent is being invited, so
         # by definition it is not in the room yet. Case-insensitive, matching how
         # `@name` mentions are routed.
@@ -1101,6 +1104,12 @@ async def _cmd_invite(
                 f"**{agent_label_with_identifier(target.display_name, target.name)}** is already in this room.",
             )
             return
+        refusal = await _console_invite_refusal(
+            host, session, target, meta.room_id, event
+        )
+        if refusal is not None:
+            await _reply(client, room, event, refusal)
+            return
 
     # `invite-agent` is admin-owned, so only the always-present admin client
     # runs this handler — the `room_service` reference lives on CommandConsumer.
@@ -1116,6 +1125,48 @@ async def _cmd_invite(
         event,
         f"Added **{agent_label_with_identifier(target.display_name, target.name)}** to this room.",
     )
+
+
+async def _console_invite_refusal(
+    host: CommandConsumer,
+    session: AsyncSession,
+    target: Agent,
+    room_id: str,
+    event: CommandEvent,
+) -> str | None:
+    """Why a Switch Console member may not add `target` here, or None.
+
+    The rule Switch Console's own add-agent applies, so the command grants no
+    more: the room's owner or a workspace admin, adding an agent they may use
+    in this room. A sender from a chat platform is not a member client and is
+    left as it was.
+    """
+    sender = await host.client_store.get_by_transport_user_id(session, event.user_id)
+    if sender is None or sender.type != MEMBER_CLIENT_TYPE:
+        return None
+    user = (
+        await host._user_store.get(session, sender.user_id) if sender.user_id else None
+    )
+    found = await session.get(Room, room_id)
+    if (
+        user is None
+        or found is None
+        or (
+            found.owner_id != user.id
+            and not await host._user_store.administers(session, user)
+        )
+    ):
+        return "Only the room's owner or a workspace admin can add agents to it."
+    if not allows_on_behalf_of(
+        parse_policy(target.addressing_policy),
+        room_id=found.id,
+        group_id=found.group_id,
+        user_id=user.id,
+        external_user_ids=[],
+        owner_user_id=target.owner_id,
+    ):
+        return f"You may not chat with **{_label(target)}** here, so you can't add it."
+    return None
 
 
 async def _cmd_remove_agent(
@@ -1248,27 +1299,31 @@ async def _manage_authority(
     workspace. The sender is a person on a chat platform, known to Switch
     through the Switch users who have linked that platform account; an
     account nobody has linked cannot be told apart from anyone else, so it is
-    refused with what to do about it.
+    refused with what to do about it. A person in Switch Console chat speaks
+    as their member client, which is their Switch user already.
     """
     client = await host.client_store.get_by_transport_user_id(session, event.user_id)
-    external = (
-        await host._external_user_store.get_by_client_id(session, client.id)
-        if client is not None
-        else None
-    )
-    if external is None:
-        return _Authority(
-            None,
-            "Only a person can rename or delete an agent, from their own chat account.",
+    if client is not None and client.type == MEMBER_CLIENT_TYPE:
+        claimants = [client.user_id] if client.user_id is not None else []
+    else:
+        external = (
+            await host._external_user_store.get_by_client_id(session, client.id)
+            if client is not None
+            else None
         )
-    claimants = await host._external_user_store.claimant_ids(session, external.id)
-    if not claimants:
-        return _Authority(
-            None,
-            "This chat account isn't linked to a Switch user, so I can't tell "
-            "whether you own this agent. Link it to your Switch user in Switch "
-            "Console (Messaging apps), then try again.",
-        )
+        if external is None:
+            return _Authority(
+                None,
+                "Only a person can rename or delete an agent, from their own chat account.",
+            )
+        claimants = await host._external_user_store.claimant_ids(session, external.id)
+        if not claimants:
+            return _Authority(
+                None,
+                "This chat account isn't linked to a Switch user, so I can't tell "
+                "whether you own this agent. Link it to your Switch user in Switch "
+                "Console (Messaging apps), then try again.",
+            )
     for user_id in claimants:
         user = await host._user_store.get(session, user_id)
         if user is None:

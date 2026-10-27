@@ -220,7 +220,7 @@ class SwitchConfig(BaseSettings):
     jwt_secret_key: str | None = None
 
     # Private hosts Switch may reach at a URL a tenant or agent supplied (a
-    # Mattermost server, an OpenCode server, an agent icon): comma-separated
+    # connector's server, an OpenCode server, an agent icon): comma-separated
     # hostnames and CIDRs. Anything else that is not a public address is
     # refused. Link-local and metadata addresses are refused even when listed.
     # See `outbound.py`.
@@ -527,7 +527,7 @@ class SwitchConfig(BaseSettings):
     # with its name, and a person relayed from another platform a lettered
     # badge from ui-avatars.com with their name in the URL. Slack, Discord and
     # Teams clients load those URLs, so the services see the name and each
-    # reader's address; the Mattermost adapter loads them from this server.
+    # reader's address.
     # False sends no such URL anywhere, stored ones included: each platform
     # shows its own default icon, new agents get no generated icon, setting an
     # icon on one of those services is refused, and Switch Console stops
@@ -536,19 +536,6 @@ class SwitchConfig(BaseSettings):
 
     server_host: str = "0.0.0.0"
     server_port: int = 8000
-
-    # Where collaboration bridges take platform callbacks. Only a Mattermost
-    # button press needs one today: the press is delivered by the Mattermost
-    # server to a URL, where every other platform Switch bridges to sends it
-    # down a connection Switch already holds open.
-    #
-    # A socket of its own, not a route on the port above, which carries the
-    # agent API, the MCP server and the operator dashboard. What an operator
-    # has to expose for a button to work should be callbacks and nothing else,
-    # so that one over-broad proxy rule cannot publish the other three. It
-    # stays unbound in a deployment where no bridge asks to be called back.
-    collaboration_callback_host: str = "0.0.0.0"
-    collaboration_callback_port: int = 8081
 
     frontend_base_url: str | None = None
 

@@ -258,6 +258,7 @@ def _chat_service(
         group_chats_enabled=True,
         connections=connections,
     )
+    room_service.use_chats(service)
     room_service.on_room_agents_changed(service.sync_room)
     return service, room_service
 
