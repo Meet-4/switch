@@ -199,12 +199,12 @@ class AccountDeletion:
             alone = all(member.id == user.id for member, _ in members)
             if (
                 not alone
-                and workspace.role == "owner"
-                and await self.users.count_owners(session) <= 1
+                and workspace.role == "admin"
+                and await self.users.count_admins(session) <= 1
             ):
                 return (
-                    f"You're the only owner of {workspace.name}, which has other "
-                    "members. Make one of them an owner first."
+                    f"You're the only admin of {workspace.name}, which has other "
+                    "members. Make one of them an admin first."
                 )
             if alone:
                 platform = await session.scalar(
@@ -364,16 +364,16 @@ class AccountDeletion:
 
     async def _successor(self, session: AsyncSession, user_id: str) -> str | None:
         """Who takes over what the workspace still needs from this person: an
-        owner, else an admin, else nobody when they are alone in it."""
+        admin, else nobody when no other admin is in it."""
         ranked = sorted(
             (
                 (membership.role, member.id)
                 for member, membership in await self.users.list_tenant_members(session)
                 if member.id != user_id
             ),
-            key=lambda entry: {"owner": 0, "admin": 1}.get(entry[0], 2),
+            key=lambda entry: 0 if entry[0] == "admin" else 1,
         )
-        if not ranked or ranked[0][0] not in {"owner", "admin"}:
+        if not ranked or ranked[0][0] != "admin":
             return None
         return ranked[0][1]
 

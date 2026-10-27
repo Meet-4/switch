@@ -8,7 +8,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from switch_core.authz import administers_tenant, owns_tenant
+from switch_core.authz import administers_tenant
 from switch_core.db.models import (
     OidcIdentity,
     TenantMember,
@@ -110,7 +110,7 @@ class UserStore:
             TenantMember(
                 tenant_id=require_tenant_id(),
                 user_id=user.id,
-                role="owner" if user.role == "admin" else "member",
+                role="admin" if user.role == "admin" else "member",
             )
         )
         await session.flush()
@@ -439,22 +439,22 @@ class UserStore:
         )
         return [(row[0], row[1]) for row in result.all()]
 
-    async def count_owners(self, session: AsyncSession) -> int:
-        """How many `owner` memberships exist in the session's bound tenant.
+    async def count_admins(self, session: AsyncSession) -> int:
+        """How many `admin` memberships exist in the session's bound tenant.
 
-        Backs "a workspace must always have an owner": removing or demoting a
+        Backs "a workspace must always have an admin": removing or demoting a
         member is refused when they are the one row this counts.
         """
         result = await session.execute(
             select(func.count())
             .select_from(TenantMember)
-            .where(TenantMember.role == "owner")
+            .where(TenantMember.role == "admin")
         )
         return result.scalar_one()
 
     async def administers(self, session: AsyncSession, user: User) -> bool:
         """Whether `user` may administer the tenant bound to `session`'s
-        context — the operator bypass, or an owner/admin membership in it.
+        context — the operator bypass, or an admin membership in it.
 
         See `authz.administers_tenant`, which this composes with a read of the
         one membership row that can answer "in *this* tenant".
@@ -463,7 +463,7 @@ class UserStore:
             RuntimeError: no tenant is bound. The question has no
                 tenant-independent answer: half of it is a membership row that
                 cannot be read without one. Answering on the operator bit
-                alone would quietly demote a workspace owner to a plain
+                alone would quietly demote a workspace admin to a plain
                 member, and the symptom — a 403 on their own workspace — says
                 nothing about why.
         """
@@ -476,23 +476,3 @@ class UserStore:
             )
         role = await self.tenant_role(session, tenant_id, user.id)
         return administers_tenant(is_operator=user.role == "admin", tenant_role=role)
-
-    async def owns(self, session: AsyncSession, user: User) -> bool:
-        """Whether `user` may decide who owns the tenant bound to `session`'s
-        context — the operator bypass, or an `owner` membership in it.
-
-        The same composition as `administers`, over `authz.owns_tenant`; see
-        there for why the two are separate bits rather than one.
-
-        Raises:
-            RuntimeError: no tenant is bound, for the same reason
-                `administers` raises.
-        """
-        tenant_id = current_tenant_id()
-        if tenant_id is None:
-            raise RuntimeError(
-                "owns requires a bound tenant; whether someone owns a "
-                "workspace is only answerable about a particular one"
-            )
-        role = await self.tenant_role(session, tenant_id, user.id)
-        return owns_tenant(is_operator=user.role == "admin", tenant_role=role)
