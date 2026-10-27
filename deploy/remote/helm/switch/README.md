@@ -148,8 +148,9 @@ Mattermost Deployment and Service but leaves its data in place:
 - The `<release>-mattermost-data` volume is kept: `helm upgrade` finds it and
   re-renders it annotated `helm.sh/resource-policy: keep`, so no later upgrade
   or uninstall deletes it. Tools that render without cluster access
-  (`helm template`, Argo CD, Flux) cannot find it and will prune it — turn
-  pruning off for that object, or back it up first.
+  (`helm template`, Argo CD, Flux) cannot find it: set
+  `retainMattermostData: true` (and `retainedMattermostDataSize` to the old
+  `mattermost.persistence.size`) so they keep it too.
 
 Back both up before upgrading (see [`BACKUP.md`](BACKUP.md)). Once you no
 longer want them:

@@ -708,6 +708,14 @@ retainTuwunelData: true
 # Must match what the volume was created with. Shrinking a PVC is rejected.
 retainedTuwunelDataSize: 10Gi
 
+# ── Retained Mattermost disk ──────────────────────────────────────────────────
+# The chart no longer deploys Mattermost. An upgrade that finds its old volume
+# keeps it (annotated keep). Renderers without cluster access (helm template,
+# Argo CD, Flux) cannot find it and would prune it: set true there to keep it.
+retainMattermostData: false
+# Must match what the volume was created with (the old mattermost.persistence.size).
+retainedMattermostDataSize: 2Gi
+
 # ── Client identity ───────────────────────────────────────────────────────────
 # The server half of every client id (@localpart:<serverName>). Nothing is
 # contacted at it — it is a naming scheme, not an address — but the ids are
