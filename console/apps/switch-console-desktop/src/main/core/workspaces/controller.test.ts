@@ -19,6 +19,7 @@ const runTemplateDocument = vi.hoisted(() => vi.fn());
 const fetchRoomDetail = vi.hoisted(() => vi.fn());
 const fetchManagedAgent = vi.hoisted(() => vi.fn());
 const claimIdentityOnServer = vi.hoisted(() => vi.fn());
+const cancelLinkRequestOnServer = vi.hoisted(() => vi.fn());
 const managedAgentLocator = vi.hoisted(() =>
   vi.fn(async () => (controllerId: string) => (controllerId === 'c1' ? 'local' : 'remote'))
 );
@@ -91,6 +92,7 @@ vi.mock('@main/core/switch-servers/disconnect-bridge', () => ({
   bridgeInstallState,
 }));
 vi.mock('@main/core/switch-servers/identities', () => ({
+  cancelLinkRequestOnServer,
   claimIdentityOnServer,
   issueLinkCodeOnServer: vi.fn(),
   searchDirectoryOnServer: vi.fn(),
@@ -249,6 +251,22 @@ describe('linking a messaging account', () => {
         outcome: 'success',
       })
     );
+  });
+
+  it('cancels a waiting confirmation through the request-only route', async () => {
+    // The full unlink would also drop a link made before confirming, which
+    // works today; Cancel must only ever withdraw the code.
+    cancelLinkRequestOnServer.mockResolvedValue({ kind: 'cancelled' });
+
+    await expect(
+      workspacesController.cancelIdentityLinkRequest({
+        workspaceId: 'ws',
+        bridgeId: 'b1',
+        identityId: 'eu-1',
+      })
+    ).resolves.toEqual({ kind: 'cancelled' });
+
+    expect(cancelLinkRequestOnServer).toHaveBeenCalledWith(expect.anything(), 'b1', 'eu-1');
   });
 
   it('reports a refused claim as a failure', async () => {

@@ -1352,8 +1352,13 @@ async def _cmd_link_account(
         user_id = request.user_id
         linked = await host._user_store.get(session, user_id)
         bridge = await session.get(CollaborationBridge, account.bridge_id)
-        name = linked.name if linked is not None else user_id
-        platform = bridge.display_name if bridge is not None else "chat"
+        # Both are held by foreign keys from the rows just written.
+        if linked is None or bridge is None:
+            raise RuntimeError(
+                f"Confirmed a link for user {user_id} on bridge "
+                f"{account.bridge_id}, but could not read either back"
+            )
+        name, platform = linked.name, bridge.display_name
         username = account.external_username
         await record_audit_event(
             session,

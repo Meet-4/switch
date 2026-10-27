@@ -2208,7 +2208,9 @@ export async function searchBridgeDirectory(
  * with that status.
  *
  * A current server answers with the link still pending and a code to post from
- * the account (`link_request`); see {@link issueIdentityLinkCode}.
+ * the account (`link_request`); see {@link issueIdentityLinkCode}. It refuses a
+ * claim that does not say it can show that code (`expects_confirmation`), since
+ * a client that cannot would leave the link pending with no way to finish it.
  */
 export async function claimBridgeIdentity(
   server: SwitchServer,
@@ -2221,7 +2223,11 @@ export async function claimBridgeIdentity(
     {
       authenticated: true,
       method: 'POST',
-      body: { external_user_id: params.externalUserId, username: params.username },
+      body: {
+        external_user_id: params.externalUserId,
+        username: params.username,
+        expects_confirmation: true,
+      },
     }
   );
   return (await res.json()) as ExternalUserSummaryJson;
@@ -2249,8 +2255,27 @@ export async function issueIdentityLinkCode(
 }
 
 /**
- * Drop one claim on a platform account, or cancel a link still waiting for its
- * code (`DELETE /collaborations/{id}/identities/{rowId}`). `externalUserRowId` is
+ * Withdraw the signed-in user's confirmation waiting on a code
+ * (`DELETE /collaborations/{id}/identities/{rowId}/request`). Only the request
+ * goes: a link that already works — one made before links had to be confirmed
+ * — stays, which is what makes this the safe Cancel where
+ * {@link releaseBridgeIdentity} is not. 404 means nothing is waiting.
+ */
+export async function cancelIdentityLinkRequest(
+  server: SwitchServer,
+  bridgeId: string,
+  externalUserRowId: string
+): Promise<void> {
+  await gatewayFetch(
+    server,
+    `/collaborations/${encodeURIComponent(bridgeId)}/identities/${encodeURIComponent(externalUserRowId)}/request`,
+    { authenticated: true, method: 'DELETE' }
+  );
+}
+
+/**
+ * Drop one claim on a platform account, along with any confirmation waiting on
+ * it (`DELETE /collaborations/{id}/identities/{rowId}`). `externalUserRowId` is
  * the `ExternalUser` row id, not the platform's id.
  *
  * Several users can hold a claim on the same account, so `userId` says whose

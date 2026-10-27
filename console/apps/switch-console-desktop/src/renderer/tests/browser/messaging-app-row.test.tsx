@@ -15,11 +15,14 @@ vi.hoisted(() => {
 
 const beginMessagingAppInstall = vi.hoisted(() => vi.fn());
 const releaseBridgeIdentity = vi.hoisted(() => vi.fn());
+const cancelIdentityLinkRequest = vi.hoisted(() => vi.fn());
 const openExternalUrl = vi.hoisted(() => vi.fn());
 const showModal = vi.hoisted(() => vi.fn());
 
 vi.mock('@renderer/lib/ipc', () => ({
-  rpc: { workspaces: { beginMessagingAppInstall, releaseBridgeIdentity } },
+  rpc: {
+    workspaces: { beginMessagingAppInstall, releaseBridgeIdentity, cancelIdentityLinkRequest },
+  },
   events: { on: () => () => {}, emit: () => {} },
 }));
 vi.mock('@renderer/lib/open-external', () => ({ openExternalUrl }));
@@ -217,8 +220,9 @@ describe('a link that needs its code', () => {
     });
   });
 
-  it('cancels a waiting link from the menu', async () => {
-    releaseBridgeIdentity.mockReset().mockResolvedValue(undefined);
+  it('cancels a waiting link from the menu, withdrawing only the request', async () => {
+    releaseBridgeIdentity.mockReset();
+    cancelIdentityLinkRequest.mockReset().mockResolvedValue({ kind: 'cancelled' });
     const onReleased = vi.fn();
     const el = await render(row({ identities: [], pending: [PENDING], onReleased }));
 
@@ -229,13 +233,46 @@ describe('a link that needs its code', () => {
     await act(async () => item!.click());
     await settle();
 
-    expect(releaseBridgeIdentity).toHaveBeenCalledWith({
+    expect(cancelIdentityLinkRequest).toHaveBeenCalledWith({
       workspaceId: 'ws-1',
       bridgeId: 'b-slack',
       identityId: 'eu-1',
-      userId: 'u1',
     });
+    expect(releaseBridgeIdentity).not.toHaveBeenCalled();
     expect(onReleased).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why a cancel did nothing, in the server’s words', async () => {
+    cancelIdentityLinkRequest.mockReset().mockResolvedValue({
+      kind: 'refused',
+      message: 'Nothing is waiting to be confirmed.',
+    });
+    const el = await render(row({ identities: [], pending: [PENDING] }));
+
+    await openMenu(el);
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (i) => i.textContent?.trim() === 'Cancel link to @amaudruz.louis'
+    );
+    await act(async () => item!.click());
+    await settle();
+
+    expect(el.textContent).toContain('Nothing is waiting to be confirmed.');
+  });
+
+  it('names the confirmed account when several are linked on the app', async () => {
+    const el = await render(
+      row({
+        identities: [
+          { ...IDENTITY, id: 'eu-old', externalUsername: 'old.handle', verified: false },
+          IDENTITY,
+        ],
+      })
+    );
+
+    expect(el.textContent).toContain('@amaudruz.louis');
+    expect(el.textContent).not.toContain('@old.handle');
+    expect(el.textContent).not.toContain('Not confirmed');
+    expect(buttonLabels(el)).not.toContain('Confirm');
   });
 
   it('marks a link made before confirming as not confirmed, and offers to confirm it', async () => {

@@ -2,23 +2,24 @@ import { format } from 'date-fns';
 import { Check, Copy } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
-import { workspacesStore } from '@renderer/features/workspaces/workspaces-store';
 import { failureText } from '@renderer/lib/errors/describe-failure';
 import { rpc } from '@renderer/lib/ipc';
 import { useModalContext } from '@renderer/lib/modal/modal-provider';
 import { Button } from '@renderer/lib/ui/button';
 import { Spinner } from '@renderer/lib/ui/spinner';
 import type {
+  CancelLinkRequestResult,
   IssueLinkCodeResult,
   LinkCode,
   LinkedIdentity,
 } from '@shared/core/switch-servers/switch-servers';
 import { accountHandle } from './link-accounts-prose';
-import { switchServersStore } from './switch-servers-store';
 import { useMyIdentities } from './use-my-identities';
 
 /** How often to look for the link having been confirmed. Nothing tells the app
- * when the code is posted, so it asks. */
+ * when the code is posted, so it asks — for as long as the code is on screen,
+ * expired or not: the expiry is read off this machine's clock, and one running
+ * fast must not stop the app noticing a code that was posted in time. */
 export const LINK_CONFIRMATION_POLL_MS = 3000;
 
 /** How long "Linked" stays on screen before the caller moves on, so the
@@ -30,7 +31,7 @@ const CONFIRMED_HOLD_MS = 1200;
  *
  * `pending` counts for nothing until the code is posted, and cancelling drops
  * it. `unverified` was made before links had to be confirmed and already
- * counts, so there is nothing to cancel — walking away leaves it as it was.
+ * counts: cancelling withdraws only the code, and the link stays as it was.
  */
 export type AccountLinkTarget = {
   /** The `ExternalUser` row id. */
@@ -62,15 +63,11 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
   /** The code a claim came back with. Null asks for a fresh one on open. */
   initialCode: LinkCode | null;
   onConfirmed: (identity: LinkedIdentity) => void;
-  /** After a pending link is cancelled. */
+  /** After the confirmation is withdrawn: a pending link is gone, an
+   * unverified one stays as it was. Either way the code screen is done. */
   onCancelled: () => void;
 }) {
   const { setCloseGuard } = useModalContext();
-  const serverId = workspacesStore.serverIdFor(workspaceId);
-  const currentUserId = serverId
-    ? (switchServersStore.statusFor(serverId)?.user?.id ?? null)
-    : null;
-
   const [code, setCode] = useState<LinkCode | null>(initialCode);
   const [expiredCode, setExpiredCode] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
@@ -79,10 +76,7 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
   const [error, setError] = useState<string | null>(null);
   const expired = code !== null && expiredCode === code.code;
 
-  const { identities, refresh } = useMyIdentities(
-    workspaceId,
-    code !== null && !expired ? LINK_CONFIRMATION_POLL_MS : false
-  );
+  const { identities, refresh } = useMyIdentities(workspaceId, LINK_CONFIRMATION_POLL_MS);
   const confirmed = identities?.find((i) => i.id === target.identityId && i.verified) ?? null;
 
   const issueCode = useCallback(async () => {
@@ -130,11 +124,6 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
     return () => clearTimeout(timer);
   }, [code]);
 
-  // A code posted just before it expired is confirmed after the last poll.
-  useEffect(() => {
-    if (expired) refresh();
-  }, [expired, refresh]);
-
   // Read through a ref so a caller's inline callback does not restart the hold
   // on every render.
   const onConfirmedRef = useRef(onConfirmed);
@@ -156,16 +145,21 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
     setCloseGuard(true);
     setError(null);
     try {
-      await rpc.workspaces.releaseBridgeIdentity({
+      // Never the full unlink: that would also drop an unverified link, which
+      // works today and is not what Cancel is about.
+      const result = await rpc.workspaces.cancelIdentityLinkRequest({
         workspaceId,
         bridgeId,
         identityId: target.identityId,
-        userId: currentUserId,
       });
       refresh();
+      if (result.kind !== 'cancelled') {
+        setError(cancelFailureText(result));
+        return;
+      }
       onCancelled();
     } catch (cause) {
-      setError(failureText(cause, 'Could not cancel this link.'));
+      setError(failureText(cause, 'Could not cancel.'));
     } finally {
       setCancelling(false);
       setCloseGuard(false);
@@ -256,11 +250,13 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
         >
           {issuing ? 'Getting a code…' : 'Get a new code'}
         </Button>
-        {target.kind === 'pending' && (
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void cancel()}>
-            {cancelling ? 'Cancelling…' : 'Cancel link'}
-          </Button>
-        )}
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void cancel()}>
+          {cancelling
+            ? 'Cancelling…'
+            : target.kind === 'pending'
+              ? 'Cancel link'
+              : 'Cancel confirmation'}
+        </Button>
       </div>
 
       {error !== null && <p className="text-xs text-destructive">{error}</p>}
@@ -294,6 +290,19 @@ function InlineCode({ text }: { text: string }) {
       )}
     </>
   );
+}
+
+function cancelFailureText(
+  result: Exclude<CancelLinkRequestResult, { kind: 'cancelled' }>
+): string {
+  switch (result.kind) {
+    case 'unauthenticated':
+      return 'Your session for this server expired. Sign in again, then retry.';
+    case 'refused':
+      return result.message;
+    case 'error':
+      return result.message;
+  }
 }
 
 function issueFailureText(result: Exclude<IssueLinkCodeResult, { kind: 'issued' }>): string {

@@ -29,6 +29,7 @@ import { AccountLinkConfirmation, type AccountLinkTarget } from './account-link-
 import { BridgeIdentitySearch } from './bridge-identity-search';
 import { accountHandle, connectedAppsSummary, LINK_ACCOUNTS_LATER } from './link-accounts-prose';
 import { orderBridges } from './messaging-apps-order';
+import { linkedIdentityOn } from './messaging-apps-warning';
 import { useMyIdentities, useMyPendingIdentities } from './use-my-identities';
 
 /**
@@ -253,7 +254,7 @@ function BridgeLinkRow({
   onLink: () => void;
   onConfirm: (target: AccountLinkTarget) => void;
 }) {
-  const identity = identities?.find((i) => i.bridgeId === bridge.id) ?? null;
+  const identity = identities === null ? null : linkedIdentityOn(bridge.id, identities);
   const waiting =
     identity === null ? (pending?.find((p) => p.bridgeId === bridge.id) ?? null) : null;
 

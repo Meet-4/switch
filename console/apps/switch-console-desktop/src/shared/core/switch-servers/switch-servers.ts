@@ -833,14 +833,16 @@ export type ClaimIdentityParams = {
  * user can act on: an account Switch has never seen has to be provisioned on
  * the platform's side, which a stopped bridge cannot do.
  *
- * `pending` is a link that counts for nothing until the code is posted from the
- * account (CHOO-3881). `code` is null only if the server issued none, in which
- * case asking for one is the way on. A server that predates confirming links
- * answers `claimed` straight away.
+ * `pending` is a link waiting for the code to be posted from the account
+ * (CHOO-3881). `code` is null only if the server issued none, in which case
+ * asking for one is the way on. `alreadyLinked` is set when the caller already
+ * held an unconfirmed link to the account, which keeps working meanwhile —
+ * otherwise the link counts for nothing until confirmed. A server that predates
+ * confirming links answers `claimed` straight away.
  */
 export type ClaimIdentityResult =
   | { kind: 'claimed'; identity: LinkedIdentity }
-  | { kind: 'pending'; pending: PendingIdentity; code: LinkCode | null }
+  | { kind: 'pending'; pending: PendingIdentity; code: LinkCode | null; alreadyLinked: boolean }
   | { kind: 'bridge-unavailable'; message: string }
   | { kind: 'unauthenticated' }
   | { kind: 'error'; message: string };
@@ -906,6 +908,18 @@ export type LinkCode = {
  */
 export type IssueLinkCodeResult =
   | { kind: 'issued'; code: LinkCode }
+  | { kind: 'refused'; message: string }
+  | { kind: 'unauthenticated' }
+  | { kind: 'error'; message: string };
+
+/**
+ * Outcome of withdrawing a confirmation that is waiting for its code. Only the
+ * request goes: a link that already works stays. `refused` is the server saying
+ * nothing is waiting — it was confirmed or cancelled meanwhile — in its own
+ * words.
+ */
+export type CancelLinkRequestResult =
+  | { kind: 'cancelled' }
   | { kind: 'refused'; message: string }
   | { kind: 'unauthenticated' }
   | { kind: 'error'; message: string };

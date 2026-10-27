@@ -860,6 +860,16 @@ async def claim_bridge_identity(
     # session holds, the caller included, and an expired row cannot be
     # reloaded from synchronous attribute access.
     caller_id = user.id
+    if not payload.expects_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Linking a chat account now has to be confirmed from that "
+                "account with a one-time code, and this version of Switch "
+                "Console cannot show one. Update Switch Console, then link the "
+                "account again."
+            ),
+        )
     bridge = await bridge_store.get(session, bridge_id)
     if bridge is None:
         raise HTTPException(status_code=404, detail="Bridge not found")
@@ -879,14 +889,7 @@ async def claim_bridge_identity(
         raise HTTPException(status_code=404, detail="Switch user not found")
 
     bridge_type, connection_config = bridge.type, bridge.connection_config or {}
-    unlinkable = collab_lifecycle.unlinkable_account_reason(
-        bridge_type, payload.external_user_id
-    )
-    if unlinkable is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"This account cannot be linked to anyone. {unlinkable}",
-        )
+    _refuse_unlinkable(collab_lifecycle, bridge_type, payload.external_user_id)
 
     external_user = await external_user_store.get_by_external_id(
         session, bridge_id, payload.external_user_id
@@ -1014,7 +1017,7 @@ async def _identity_summary(
     )
 
 
-async def _own_link_target(
+async def _identity_on_bridge(
     session: AsyncSession,
     external_user_store: ExternalUserStore,
     bridge_id: str,
@@ -1024,6 +1027,35 @@ async def _own_link_target(
     if external_user is None or external_user.bridge_id != bridge_id:
         raise HTTPException(status_code=404, detail="Identity not found")
     return external_user
+
+
+def _refuse_unlinkable(
+    collab_lifecycle: CollaborationBridgeLifecycleService,
+    bridge_type: str,
+    external_user_id: str,
+) -> None:
+    unlinkable = collab_lifecycle.unlinkable_account_reason(
+        bridge_type, external_user_id
+    )
+    if unlinkable is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This account cannot be linked to anyone. {unlinkable}",
+        )
+
+
+def _require_self_or_admin(
+    caller: User, is_admin: bool, user_id: str | None, doing: str
+) -> str:
+    """The Switch user a request acts for: the caller, or anyone for an
+    admin."""
+    target_user_id = user_id or caller.id
+    if target_user_id != caller.id and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Only an admin may {doing} for another user",
+        )
+    return target_user_id
 
 
 @router.post("/{bridge_id}/identities/{external_user_row_id}/code")
@@ -1049,25 +1081,20 @@ async def issue_identity_link_code(
     bridge = await bridge_store.get(session, bridge_id)
     if bridge is None:
         raise HTTPException(status_code=404, detail="Bridge not found")
-    external_user = await _own_link_target(
+    external_user = await _identity_on_bridge(
         session, external_user_store, bridge_id, external_user_row_id
     )
-    unlinkable = collab_lifecycle.unlinkable_account_reason(
-        bridge.type, external_user.external_user_id
+    _refuse_unlinkable(collab_lifecycle, bridge.type, external_user.external_user_id)
+    # Locked first, so a code posted at this moment is either redeemed before
+    # this reads the claim or waits for the new code to replace it.
+    request = await external_user_store.lock_link_request(
+        session, external_user.id, caller_id
     )
-    if unlinkable is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"This account cannot be linked to anyone. {unlinkable}",
-        )
     claim = await external_user_store.get_claim(session, external_user.id, caller_id)
     if claim is not None and claim.verified_at is not None:
         raise HTTPException(
             status_code=409, detail="This account has already confirmed the link"
         )
-    request = await external_user_store.get_link_request(
-        session, external_user.id, caller_id
-    )
     if request is None:
         if claim is None:
             raise HTTPException(
@@ -1110,7 +1137,7 @@ async def verify_identity_with_session(
     post, since the platform says whose it is. Mattermost only.
     """
     caller_id = user.id
-    external_user = await _own_link_target(
+    external_user = await _identity_on_bridge(
         session, external_user_store, bridge_id, external_user_row_id
     )
     request = await external_user_store.get_link_request(
@@ -1143,7 +1170,7 @@ async def verify_identity_with_session(
             detail="That session token belongs to a different account",
         )
 
-    request = await external_user_store.get_link_request(
+    request = await external_user_store.lock_link_request(
         session, external_user.id, caller_id
     )
     if request is None:
@@ -1166,6 +1193,43 @@ async def verify_identity_with_session(
     )
 
 
+@router.delete("/{bridge_id}/identities/{external_user_row_id}/request")
+async def cancel_identity_link_request(
+    bridge_id: str,
+    external_user_row_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    external_user_store: Annotated[ExternalUserStore, Depends(get_external_user_store)],
+    user_store: Annotated[UserStore, Depends(get_user_store)],
+    user: Annotated[User, Depends(get_current_user)],
+    is_admin: Annotated[bool, Depends(get_tenant_is_admin)],
+    user_id: str | None = None,
+) -> ExternalUserSummary:
+    """Stop waiting for the account to confirm a link (CHOO-3881) — your own,
+    or someone else's if you are an admin.
+
+    Never touches a claim: walking away from confirming a link made before
+    links needed confirming leaves that link working. Unlinking is
+    `release_bridge_identity`.
+    """
+    external_user = await _identity_on_bridge(
+        session, external_user_store, bridge_id, external_user_row_id
+    )
+    target_user_id = _require_self_or_admin(
+        user, is_admin, user_id, "cancel a link to a messaging identity"
+    )
+    if not await external_user_store.cancel_link_request(
+        session, external_user, target_user_id
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="That user has no link to this account waiting to be confirmed",
+        )
+    await session.commit()
+    return await _identity_summary(
+        session, external_user_store, user_store, external_user, None
+    )
+
+
 @router.delete("/{bridge_id}/identities/{external_user_row_id}")
 async def release_bridge_identity(
     bridge_id: str,
@@ -1177,19 +1241,15 @@ async def release_bridge_identity(
     is_admin: Annotated[bool, Depends(get_tenant_is_admin)],
     user_id: str | None = None,
 ) -> ExternalUserSummary:
-    """Drop a claim on a platform account, or cancel a link still waiting to
+    """Drop a claim on a platform account, and any link to it still waiting to
     be confirmed — your own, or someone else's if you are an admin. Anyone
     else's claim on the same account is left standing."""
-    external_user = await external_user_store.get(session, external_user_row_id)
-    if external_user is None or external_user.bridge_id != bridge_id:
-        raise HTTPException(status_code=404, detail="Identity not found")
-
-    target_user_id = user_id or user.id
-    if target_user_id != user.id and not is_admin:
-        raise HTTPException(
-            status_code=403,
-            detail="Only an admin may release another user's messaging identity",
-        )
+    external_user = await _identity_on_bridge(
+        session, external_user_store, bridge_id, external_user_row_id
+    )
+    target_user_id = _require_self_or_admin(
+        user, is_admin, user_id, "release a messaging identity"
+    )
 
     released = await external_user_store.release(session, external_user, target_user_id)
     if not released:

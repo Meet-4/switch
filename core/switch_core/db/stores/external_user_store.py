@@ -1,5 +1,5 @@
 from collections.abc import Collection
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, delete, func, select
@@ -18,6 +18,7 @@ from switch_core.db.models import (
     ExternalUser,
     ExternalUserClaim,
     ExternalUserLinkRequest,
+    TenantMember,
 )
 
 
@@ -256,6 +257,42 @@ class ExternalUserStore:
             ExternalUserLinkRequest, (external_user_id, switch_user_id)
         )
 
+    async def lock_link_request(
+        self, session: AsyncSession, external_user_id: str, switch_user_id: str
+    ) -> ExternalUserLinkRequest | None:
+        """The request as the database has it now, locked until the
+        transaction ends.
+
+        For a caller about to change or confirm it while a code may be
+        redeemed, or the request cancelled, at the same moment. Read past the
+        session's identity map, which may hold a copy from before either.
+        """
+        result = await session.execute(
+            select(ExternalUserLinkRequest)
+            .where(
+                ExternalUserLinkRequest.external_user_id == external_user_id,
+                ExternalUserLinkRequest.user_id == switch_user_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def cancel_link_request(
+        self, session: AsyncSession, external_user: ExternalUser, switch_user_id: str
+    ) -> bool:
+        """Drop a request waiting for the account to confirm it, leaving any
+        claim the pair already has (one made before links needed confirming)
+        as it is. Returns whether there was a request to drop."""
+        result = await session.execute(
+            delete(ExternalUserLinkRequest).where(
+                ExternalUserLinkRequest.external_user_id == external_user.id,
+                ExternalUserLinkRequest.user_id == switch_user_id,
+            )
+        )
+        await session.flush()
+        return cast("CursorResult[Any]", result).rowcount > 0
+
     async def link_requests_of_user(
         self, session: AsyncSession, switch_user_id: str
     ) -> list[tuple[ExternalUser, ExternalUserLinkRequest]]:
@@ -296,31 +333,51 @@ class ExternalUserStore:
         if normalised is None:
             raise RuntimeError(f"Generated a link code that does not parse: {code!r}")
         request.code_hash = hash_link_code(normalised)
-        request.code_expires_at = datetime.now(UTC) + LINK_CODE_TTL
+        # The database's clock, since the database's clock is what a redeem
+        # compares it to.
+        request.code_expires_at = func.now() + LINK_CODE_TTL  # type: ignore[assignment]
         await session.flush()
+        await session.refresh(request, ["code_expires_at"])
+        if request.code_expires_at is None:
+            raise RuntimeError("A link code was issued but its expiry was not stored")
         return code, request.code_expires_at
 
     async def redeem_link_code(
         self, session: AsyncSession, external_user: ExternalUser, code: str
     ) -> ExternalUserLinkRequest | None:
         """Confirm the link this code was issued for, if it was issued for
-        this account and has not expired.
+        this account, has not expired, and is for someone still a member of
+        the workspace.
 
         The request becomes a verified claim, upgrading an unverified one in
         place. None when nothing matches, which the caller reports without
         saying which part was wrong.
+
+        Membership is checked here as well as when the link was started,
+        because a request outlives a member's removal from the workspace and
+        the claim it turns into decides who the account is recognised as.
         """
         normalised = normalise_link_code(code)
         if normalised is None:
             return None
+        member = (
+            select(TenantMember.user_id)
+            .where(
+                TenantMember.tenant_id == ExternalUserLinkRequest.tenant_id,
+                TenantMember.user_id == ExternalUserLinkRequest.user_id,
+            )
+            .exists()
+        )
         request = await session.scalar(
             select(ExternalUserLinkRequest)
             .where(
                 ExternalUserLinkRequest.external_user_id == external_user.id,
                 ExternalUserLinkRequest.code_hash == hash_link_code(normalised),
                 ExternalUserLinkRequest.code_expires_at > func.now(),
+                member,
             )
-            .with_for_update()
+            .with_for_update(of=ExternalUserLinkRequest)
+            .execution_options(populate_existing=True)
         )
         if request is None:
             return None

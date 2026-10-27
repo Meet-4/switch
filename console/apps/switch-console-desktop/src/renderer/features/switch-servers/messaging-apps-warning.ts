@@ -82,14 +82,27 @@ export function accountLinkPrompts(
   return bridges
     .filter((bridge) => bridge.status === 'active')
     .flatMap((bridge): AccountLinkPrompt[] => {
-      const linked = identities.filter((i) => i.bridgeId === bridge.id);
-      if (linked.some((i) => i.verified)) return [];
-      const unverified = linked[0];
-      if (unverified !== undefined) return [{ kind: 'unverified', bridge, identity: unverified }];
+      const linked = linkedIdentityOn(bridge.id, identities);
+      if (linked?.verified) return [];
+      if (linked !== null) return [{ kind: 'unverified', bridge, identity: linked }];
       if (pending === null) return [];
       const waiting = pending.find((p) => p.bridgeId === bridge.id);
       return [waiting ? { kind: 'pending', bridge, link: waiting } : { kind: 'link', bridge }];
     });
+}
+
+/**
+ * The account to show for an app when several are linked there: a confirmed
+ * one if there is any, else any link that counts. Every surface that names one
+ * account per app reads it from here, so a row never shows an unconfirmed link
+ * while the prompt above it is satisfied by a confirmed one.
+ */
+export function linkedIdentityOn(
+  bridgeId: string,
+  identities: LinkedIdentity[]
+): LinkedIdentity | null {
+  const linked = identities.filter((i) => i.bridgeId === bridgeId);
+  return linked.find((i) => i.verified) ?? linked[0] ?? null;
 }
 
 /** The warning, as one sentence naming the apps. Callers pass a non-empty list

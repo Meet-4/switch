@@ -9,6 +9,7 @@ every owner check trusts.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 import pytest
@@ -29,6 +30,7 @@ from switch_core.db.stores.external_user_store import ExternalUserStore
 from switch_core.db.stores.user_store import UserStore
 from switch_core.gateway.auth_routes import my_identities, my_pending_identities
 from switch_core.gateway.collaborations import (
+    cancel_identity_link_request,
     claim_bridge_identity,
     issue_identity_link_code,
     release_bridge_identity,
@@ -44,10 +46,17 @@ _STAND_IN = "stand-in"
 
 
 class _Adapter:
-    def __init__(self, session_owner: str | Exception) -> None:
+    def __init__(
+        self,
+        session_owner: str | Exception,
+        meanwhile: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self._session_owner = session_owner
+        self._meanwhile = meanwhile
 
     async def account_id_for_session(self, _token: str) -> str:
+        if self._meanwhile is not None:
+            await self._meanwhile()
         if isinstance(self._session_owner, Exception):
             raise self._session_owner
         return self._session_owner
@@ -147,6 +156,7 @@ async def _claim(
     external_user_id: str = "U-ada",
     for_user: User | None = None,
     is_admin: bool = False,
+    expects_confirmation: bool = True,
 ) -> object:
     async with world.session_factory() as session:
         return await claim_bridge_identity(
@@ -155,6 +165,7 @@ async def _claim(
                 external_user_id=external_user_id,
                 username="ada",
                 user_id=for_user.id if for_user is not None else None,
+                expects_confirmation=expects_confirmation,
             ),
             session,
             CollaborationBridgeStore(),
@@ -231,6 +242,22 @@ class TestClaimWaitsForTheAccount:
             (c.user_id, c.verified)
             for c in again.claimed_by  # type: ignore[attr-defined]
         ] == [(world.ada.id, True)]
+
+    async def test_a_console_from_before_confirmation_is_told_to_update(
+        self, world: _World
+    ) -> None:
+        # It would otherwise drop the code and report a link that counts for
+        # nothing as made.
+        with pytest.raises(HTTPException) as refused:
+            await _claim(world, world.ada, expects_confirmation=False)
+
+        assert refused.value.status_code == 409
+        assert "Update Switch Console" in refused.value.detail
+        async with world.session_factory() as session:
+            assert (
+                await _STORE.get_link_request(session, world.account.id, world.ada.id)
+                is None
+            )
 
     async def test_a_stand_in_account_cannot_be_linked(self, world: _World) -> None:
         with pytest.raises(HTTPException) as refused:
@@ -314,6 +341,27 @@ class TestIssuingACode:
         claim = await _claim_of(world, world.ada)
         assert claim is not None and claim.verified_at is not None
 
+    async def test_a_code_for_someone_since_removed_confirms_nothing(
+        self, world: _World
+    ) -> None:
+        summary = await _claim(world, world.ada)
+        async with world.session_factory() as session:
+            await session.delete(
+                await session.get(TenantMember, (TENANT_ZERO_ID, world.ada.id))
+            )
+            await session.commit()
+
+        async with world.session_factory() as session:
+            assert (
+                await _STORE.redeem_link_code(
+                    session,
+                    world.account,
+                    summary.link_request.code.code,  # type: ignore[attr-defined]
+                )
+                is None
+            )
+        assert await _claim_of(world, world.ada) is None
+
     async def test_a_confirmed_link_needs_no_code(self, world: _World) -> None:
         summary = await _claim(world, world.ada)
         async with world.session_factory() as session:
@@ -373,6 +421,22 @@ class TestVerifyingWithASession:
 
         assert refused.value.status_code == 501
 
+    async def test_a_link_cancelled_during_the_check_is_not_confirmed(
+        self, world: _World
+    ) -> None:
+        await _claim(world, world.ada)
+
+        async def cancel() -> None:
+            async with world.session_factory() as session:
+                await _STORE.release(session, world.account, world.ada.id)
+                await session.commit()
+
+        with pytest.raises(HTTPException) as refused:
+            await _verify(world, world.ada, _Adapter("U-ada", meanwhile=cancel))
+
+        assert refused.value.status_code == 409
+        assert await _claim_of(world, world.ada) is None
+
     async def test_there_must_be_a_link_waiting(self, world: _World) -> None:
         with pytest.raises(HTTPException) as refused:
             await _verify(world, world.ada, _Adapter("U-ada"))
@@ -409,6 +473,74 @@ class TestCancelling:
                 )
                 is None
             )
+
+    async def test_cancelling_a_confirmation_keeps_an_older_link(
+        self, world: _World
+    ) -> None:
+        async with world.session_factory() as session:
+            session.add(
+                ExternalUserClaim(
+                    external_user_id=world.account.id, user_id=world.ada.id
+                )
+            )
+            await session.commit()
+        code = await _issue(world, world.ada)
+
+        async with world.session_factory() as session:
+            await cancel_identity_link_request(
+                world.bridge_id,
+                world.account.id,
+                session,
+                _STORE,
+                UserStore(),
+                world.ada,
+                False,
+            )
+
+        claim = await _claim_of(world, world.ada)
+        assert claim is not None and claim.verified_at is None
+        async with world.session_factory() as session:
+            assert (
+                await _STORE.redeem_link_code(
+                    session,
+                    world.account,
+                    code.code,  # type: ignore[attr-defined]
+                )
+                is None
+            )
+
+    async def test_cancelling_with_nothing_waiting_is_a_404(
+        self, world: _World
+    ) -> None:
+        async with world.session_factory() as session:
+            with pytest.raises(HTTPException) as refused:
+                await cancel_identity_link_request(
+                    world.bridge_id,
+                    world.account.id,
+                    session,
+                    _STORE,
+                    UserStore(),
+                    world.ada,
+                    False,
+                )
+        assert refused.value.status_code == 404
+
+    async def test_cancelling_someone_elses_takes_an_admin(self, world: _World) -> None:
+        await _claim(world, world.ada)
+
+        async with world.session_factory() as session:
+            with pytest.raises(HTTPException) as refused:
+                await cancel_identity_link_request(
+                    world.bridge_id,
+                    world.account.id,
+                    session,
+                    _STORE,
+                    UserStore(),
+                    world.bob,
+                    False,
+                    user_id=world.ada.id,
+                )
+        assert refused.value.status_code == 403
 
     async def test_unlinking_nothing_is_a_404(self, world: _World) -> None:
         async with world.session_factory() as session:

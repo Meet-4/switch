@@ -115,6 +115,7 @@ async def _claim(
                 external_user_id=external_user.external_user_id,
                 username=external_user.external_username,
                 user_id=target_user_id,
+                expects_confirmation=True,
             ),
             session,
             CollaborationBridgeStore(),
@@ -247,7 +248,9 @@ async def test_claiming_an_account_switch_has_not_seen_starts_linking_it(
         assert caller is not None
         summary = await claim_bridge_identity(
             bridge_id,
-            ClaimIdentityRequest(external_user_id=unseen, username="user"),
+            ClaimIdentityRequest(
+                external_user_id=unseen, username="user", expects_confirmation=True
+            ),
             session,
             CollaborationBridgeStore(),
             _EXTERNAL_USERS,

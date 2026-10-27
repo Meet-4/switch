@@ -379,7 +379,12 @@ def link_owner_identity(
     """
     resp = client.get("/gateway/auth/me/identities")
     if resp.is_success:
-        if any(i.get("bridge_id") == bridge_id for i in resp.json()):
+        # A link from before links needed confirming reads as unverified, and
+        # is confirmed below like a new one.
+        if any(
+            i.get("bridge_id") == bridge_id and i.get("verified", True)
+            for i in resp.json()
+        ):
             print(f"Gateway admin already linked to a Mattermost account: {bridge_id}")
             return
     else:
@@ -400,7 +405,11 @@ def link_owner_identity(
 
     resp = client.post(
         f"/gateway/collaborations/{bridge_id}/identities",
-        json={"external_user_id": external_user_id, "username": MATTERMOST_USER},
+        json={
+            "external_user_id": external_user_id,
+            "username": MATTERMOST_USER,
+            "expects_confirmation": True,
+        },
     )
     if resp.is_success:
         identity = resp.json()

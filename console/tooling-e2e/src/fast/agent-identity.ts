@@ -18,8 +18,9 @@ import { WRITABLE, type FastScenario } from "./scenario.ts";
  * 0. the human links their chat account: the link waits, listed as pending,
  *    until the account posts a code from the gateway, which is what makes
  *    the chat commands recognise them. A link already in place (the stack's
- *    setup makes one) is undone first, so the confirmation always runs, and
- *    the account ends up linked and confirmed either way;
+ *    setup makes one, and one from before links needed confirming reads as
+ *    unconfirmed) is undone first, so the confirmation always runs, and the
+ *    account ends up linked and confirmed either way;
  * 1. a rename from the gateway renames the agent's Mattermost bot in place,
  *    and the new name reaches the agent while the old one does not;
  * 2. `!rename-agent` from the chat does the same, for the person who owns the
@@ -35,6 +36,7 @@ export const agentIdentity: FastScenario = {
       "PUT /gateway/agents/{agent_id}/name",
       "POST /gateway/collaborations/{bridge_id}/identities",
       "DELETE /gateway/collaborations/{bridge_id}/identities/{external_user_row_id}",
+      "DELETE /gateway/collaborations/{bridge_id}/identities/{external_user_row_id}/request",
       "GET /gateway/auth/me/identities/pending",
       "POST /gateway/collaborations/{bridge_id}/identities/{external_user_row_id}/code",
     ],
@@ -59,12 +61,23 @@ export const agentIdentity: FastScenario = {
         bridged.human.username,
       );
     let link = await claim();
-    if (link.code === null) {
+    // Already linked, confirmed (no code) or not (not listed as waiting).
+    if (
+      link.code === null ||
+      !(await switchClient.pendingIdentityIds()).includes(link.identityId)
+    ) {
       await switchClient.releaseIdentity(link.bridgeId, link.identityId);
       link = await claim();
     }
     expect(link.code).not.toBeNull();
     expect(await switchClient.pendingIdentityIds()).toContain(link.identityId);
+    // Cancelling stops the wait; linking again starts a new one.
+    await switchClient.cancelLinkRequest(link.bridgeId, link.identityId);
+    expect(await switchClient.pendingIdentityIds()).not.toContain(
+      link.identityId,
+    );
+    link = await claim();
+    expect(link.code).not.toBeNull();
     const admin = await mm.waitForBotUser("switch-admin", 30_000);
     // A fresh code replaces the first, which then confirms nothing.
     const code = await switchClient.issueLinkCode(

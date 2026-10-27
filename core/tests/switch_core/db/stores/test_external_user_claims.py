@@ -15,15 +15,17 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from switch_core.db.models import (
+    TENANT_ZERO_ID,
     Client,
     CollaborationBridge,
     ExternalUser,
     ExternalUserClaim,
     ExternalUserLinkRequest,
+    TenantMember,
     User,
 )
 from switch_core.db.stores.external_user_store import ExternalUserStore
@@ -86,6 +88,9 @@ async def _make_user(session: AsyncSession, *, name: str) -> str:
         password_hash="x",
     )
     session.add(user)
+    await session.flush()
+    # A code only confirms a link for a member of the workspace.
+    session.add(TenantMember(tenant_id=TENANT_ZERO_ID, user_id=user.id, role="member"))
     await session.flush()
     return user.id
 
@@ -553,6 +558,9 @@ class TestLinkRequests:
             await session.commit()
 
         async with session_factory() as session:
+            await session.execute(
+                delete(TenantMember).where(TenantMember.user_id == user_id)
+            )
             await session.delete(await session.get(User, user_id))
             await session.commit()
 
@@ -582,6 +590,9 @@ class TestClaimsAreCascaded:
             await session.commit()
 
         async with session_factory() as session:
+            await session.execute(
+                delete(TenantMember).where(TenantMember.user_id == leaving)
+            )
             await session.delete(await session.get(User, leaving))
             await session.commit()
 

@@ -654,6 +654,7 @@ export class SwitchClient {
       external_user_id: externalUserId,
       username,
       user_id: null,
+      expects_confirmation: true,
     });
     if (body.link_request && !body.link_request.code)
       throw new Error("A link for yourself came back without a code");
@@ -673,6 +674,18 @@ export class SwitchClient {
     await this.gateway(
       "DELETE",
       `/collaborations/${bridgeId}/identities/${identityId}`,
+    );
+  }
+
+  /**
+   * `DELETE /gateway/collaborations/{bridge}/identities/{identity}/request` —
+   * stop waiting for a chat account to confirm the signed-in user's link,
+   * leaving any link it already has.
+   */
+  async cancelLinkRequest(bridgeId: string, identityId: string): Promise<void> {
+    await this.gateway(
+      "DELETE",
+      `/collaborations/${bridgeId}/identities/${identityId}/request`,
     );
   }
 

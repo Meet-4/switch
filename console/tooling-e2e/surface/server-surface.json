@@ -108,6 +108,11 @@
       "flags": []
     },
     {
+      "route": "DELETE /gateway/collaborations/{bridge_id}/identities/{external_user_row_id}/request",
+      "auth": "session",
+      "flags": []
+    },
+    {
       "route": "DELETE /gateway/collaborations/{bridge_id}/teams/{team_id}",
       "auth": "session",
       "flags": []

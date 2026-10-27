@@ -8,6 +8,7 @@ import {
   accountLinkPrompts,
   hasUnlinkedMessagingApp,
   identityLinkOrderingNote,
+  linkedIdentityOn,
   shouldOfferIdentityLinkOnConnect,
   unrecognisedMessagingApps,
   unrecognisedMessagingAppsMessage,
@@ -270,5 +271,25 @@ describe('accountLinkPrompts', () => {
         [pendingLink('b-slack')]
       )
     ).toEqual([]);
+  });
+});
+
+describe('linkedIdentityOn', () => {
+  const unconfirmed = { ...identity('b-slack', false), id: 'old', externalUsername: 'old' };
+  const confirmed = { ...identity('b-slack'), id: 'new', externalUsername: 'new' };
+
+  it('shows a confirmed account over an unconfirmed one, in either order', () => {
+    // Otherwise the row would say "Not confirmed" under a prompt that is
+    // satisfied, since the prompt asks whether any link is confirmed.
+    expect(linkedIdentityOn('b-slack', [unconfirmed, confirmed])).toBe(confirmed);
+    expect(linkedIdentityOn('b-slack', [confirmed, unconfirmed])).toBe(confirmed);
+  });
+
+  it('falls back to an unconfirmed account, which still counts', () => {
+    expect(linkedIdentityOn('b-slack', [unconfirmed])).toBe(unconfirmed);
+  });
+
+  it('is null for an app with nothing linked', () => {
+    expect(linkedIdentityOn('b-mm', [confirmed])).toBeNull();
   });
 });

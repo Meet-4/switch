@@ -494,9 +494,9 @@ none of it is needed to take part in a conversation.
 
   A person links their chat account to their Switch user in Switch Console,
   which shows them a one-time code. The link counts only once they post
-  `!link-account CODE` from that chat account: `/link-account` where the
-  platform has slash commands (`/link_account` on Telegram), and on Teams they
-  @mention the Switch app with `link-account CODE`. `!unlink-account` lists the
+  `!link-account CODE` from that chat account; Console says exactly how on each
+  platform (on Teams they @mention the Switch app with `link-account CODE`, on
+  Telegram they send `/link_account CODE`). `!unlink-account` lists the
   Switch users a chat account is linked to, and `!unlink-account NAME` removes
   one; both act only on the account that sends them. Never ask for a code or
   post one yourself: it only works from the account it was issued for.

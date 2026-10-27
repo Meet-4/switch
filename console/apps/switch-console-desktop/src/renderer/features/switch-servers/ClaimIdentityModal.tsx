@@ -15,6 +15,7 @@ import {
 import type { LinkCode, LinkedIdentity } from '@shared/core/switch-servers/switch-servers';
 import { AccountLinkConfirmation, type AccountLinkTarget } from './account-link-confirmation';
 import { BridgeIdentitySearch } from './bridge-identity-search';
+import { linkedIdentityOn } from './messaging-apps-warning';
 import { useMyIdentities } from './use-my-identities';
 
 type ClaimIdentityModalArgs = {
@@ -79,7 +80,7 @@ export const ClaimIdentityModal = observer(function ClaimIdentityModal({
   // Not while re-reading: straight after an app is added the cached list does
   // not have it yet.
   const bridgeIsGone = !bridgesQuery.isFetching && bridges.length > 0 && selectedBridge === null;
-  const alreadyLinked = (identities ?? []).find((i) => i.bridgeId === bridgeId) ?? null;
+  const alreadyLinked = identities === null ? null : linkedIdentityOn(bridgeId, identities);
 
   const platform = bridgePlatformLabel(selectedBridge?.type);
   const bridgeDisplayName = selectedBridge?.displayName ?? 'the workspace';

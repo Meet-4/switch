@@ -25,7 +25,8 @@ vi.mock('./auth', () => ({
 }));
 vi.mock('./console-identity', () => ({ consoleIdentityHeaders: async () => ({}) }));
 
-const { claimIdentityOnServer, issueLinkCodeOnServer } = await import('./identities');
+const { cancelLinkRequestOnServer, claimIdentityOnServer, issueLinkCodeOnServer } =
+  await import('./identities');
 
 const SERVER = {
   id: 'srv-1',
@@ -89,6 +90,19 @@ afterEach(() => {
 });
 
 describe('claimIdentityOnServer', () => {
+  it('says it can show a code, which a current server requires', async () => {
+    serve(response(200, SUMMARY));
+
+    await claimIdentityOnServer(SERVER, PARAMS);
+
+    const claim = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/identities'));
+    expect(JSON.parse((claim![1] as { body: string }).body)).toEqual({
+      external_user_id: 'U1',
+      username: 'ada',
+      expects_confirmation: true,
+    });
+  });
+
   it('comes back pending, carrying the code, when the server wants proof', async () => {
     serve(response(200, { ...SUMMARY, link_request: { user_id: 'u1', code: CODE } }));
 
@@ -109,6 +123,38 @@ describe('claimIdentityOnServer', () => {
         expiresAt: '2026-10-27T12:30:00Z',
         instructions: 'Post `!link-account 7KQ2-M9XD` from that account.',
       },
+      alreadyLinked: false,
+    });
+  });
+
+  it('says when the caller already holds an unconfirmed link to the account', async () => {
+    // Re-claiming an account linked before confirming existed asks for a code
+    // too, but that link works meanwhile — cancelling must not take it away.
+    serve(
+      response(200, {
+        ...SUMMARY,
+        claimed_by: [{ user_id: 'u1', user_name: 'Ada', verified: false }],
+        link_request: { user_id: 'u1', code: CODE },
+      })
+    );
+
+    await expect(claimIdentityOnServer(SERVER, PARAMS)).resolves.toMatchObject({
+      kind: 'pending',
+      alreadyLinked: true,
+    });
+  });
+
+  it('does not count someone else’s link to the account as the caller’s', async () => {
+    serve(
+      response(200, {
+        ...SUMMARY,
+        claimed_by: [{ user_id: 'u2', user_name: 'Grace', verified: true }],
+        link_request: { user_id: 'u1', code: CODE },
+      })
+    );
+
+    await expect(claimIdentityOnServer(SERVER, PARAMS)).resolves.toMatchObject({
+      alreadyLinked: false,
     });
   });
 
@@ -191,6 +237,38 @@ describe('issueLinkCodeOnServer', () => {
     fetchMock.mockResolvedValue(response(500, { detail: 'boom' }));
 
     await expect(issueLinkCodeOnServer(SERVER, 'b1', 'eu-1')).rejects.toMatchObject({
+      status: 500,
+    });
+  });
+});
+
+describe('cancelLinkRequestOnServer', () => {
+  it('withdraws only the waiting request, never the link', async () => {
+    fetchMock.mockResolvedValue(response(200, SUMMARY));
+
+    await expect(cancelLinkRequestOnServer(SERVER, 'b1', 'eu-1')).resolves.toEqual({
+      kind: 'cancelled',
+    });
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string }];
+    expect(url).toBe(
+      'https://switch.example.com/gateway/collaborations/b1/identities/eu-1/request'
+    );
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('passes on the server’s reason when nothing is waiting', async () => {
+    fetchMock.mockResolvedValue(response(404, { detail: 'Nothing is waiting to be confirmed' }));
+
+    await expect(cancelLinkRequestOnServer(SERVER, 'b1', 'eu-1')).resolves.toEqual({
+      kind: 'refused',
+      message: 'Nothing is waiting to be confirmed',
+    });
+  });
+
+  it('throws on anything it cannot name', async () => {
+    fetchMock.mockResolvedValue(response(500, { detail: 'boom' }));
+
+    await expect(cancelLinkRequestOnServer(SERVER, 'b1', 'eu-1')).rejects.toMatchObject({
       status: 500,
     });
   });

@@ -89,6 +89,7 @@ _OWNER_SCOPED_PATHS = {
     "/{bridge_id}/identities",
     "/{bridge_id}/identities/{external_user_row_id}",
     "/{bridge_id}/identities/{external_user_row_id}/code",
+    "/{bridge_id}/identities/{external_user_row_id}/request",
     "/{bridge_id}/identities/{external_user_row_id}/verify-session",
 }
 
@@ -133,6 +134,7 @@ class TestIdentityRoutesAreSelfOrAdmin:
                     external_user_id="U123",
                     username="them",
                     user_id="someone-else",
+                    expects_confirmation=True,
                 ),
                 session=object(),  # type: ignore[arg-type]
                 bridge_store=_StubGet(object()),  # type: ignore[arg-type]

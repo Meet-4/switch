@@ -20,11 +20,13 @@ from switch_core.bridges.agent.commands import _cmd_link_account, _cmd_unlink_ac
 from switch_core.clients.command_consumer import CommandConsumer
 from switch_core.db.audit import AuditAction
 from switch_core.db.models import (
+    TENANT_ZERO_ID,
     AuditEvent,
     Client,
     CollaborationBridge,
     ExternalUser,
     ExternalUserClaim,
+    TenantMember,
     User,
 )
 from switch_core.db.stores.client_store import ClientStore
@@ -51,6 +53,8 @@ class _World:
 async def _user(session: AsyncSession, name: str) -> str:
     user = User(name=name, email=f"{name}@test", role="user", password_hash="x")
     session.add(user)
+    await session.flush()
+    session.add(TenantMember(tenant_id=TENANT_ZERO_ID, user_id=user.id, role="member"))
     await session.flush()
     return user.id
 

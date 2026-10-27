@@ -569,7 +569,11 @@ class TestBridgeRoutes:
             )
             claimed = await client.post(
                 f"/bridges/{bridge.id}/identities",
-                json={"external_user_id": "U1", "username": "ada"},
+                json={
+                    "external_user_id": "U1",
+                    "username": "ada",
+                    "expects_confirmation": True,
+                },
             )
             deleted = await client.delete(f"/bridges/{bridge.id}")
 

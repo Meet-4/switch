@@ -80,6 +80,7 @@ import {
   updateTemplate,
 } from '@main/core/switch-servers/gateway-client';
 import {
+  cancelLinkRequestOnServer,
   claimIdentityOnServer,
   issueLinkCodeOnServer,
   searchDirectoryOnServer,
@@ -121,6 +122,7 @@ import type {
   AgentIconBackfill,
   AgentVerifyResult,
   BridgeDirectorySearchResult,
+  CancelLinkRequestResult,
   ChatClaim,
   ClaimIdentityParams,
   ConnectedChat,
@@ -1001,8 +1003,19 @@ export const workspacesController = createRPCController({
       issueLinkCodeOnServer(server, params.bridgeId, params.identityId)
     ),
 
-  /** Give up a claim on a messaging-app account, or cancel a link still waiting
-   * for its code, leaving any other user's claim on it in place. `userId` is
+  /** Withdraw the signed-in user's confirmation waiting on a code. A link that
+   * already works stays; unlinking is {@link releaseBridgeIdentity}. */
+  cancelIdentityLinkRequest: (params: {
+    workspaceId: string;
+    bridgeId: string;
+    identityId: string;
+  }): Promise<CancelLinkRequestResult> =>
+    withReachableWorkspaceSession(params.workspaceId, (server) =>
+      cancelLinkRequestOnServer(server, params.bridgeId, params.identityId)
+    ),
+
+  /** Give up a claim on a messaging-app account, along with any confirmation
+   * waiting on it, leaving any other user's claim on it in place. `userId` is
    * whose claim to drop — null for the signed-in user, which is the only one
    * this app offers. Failures propagate: unclaiming is a deliberate act, and
    * reporting success for one that did not happen would leave the user thinking

@@ -28,6 +28,7 @@ const searchBridgeDirectory = vi.hoisted(() => vi.fn());
 const claimBridgeIdentity = vi.hoisted(() => vi.fn());
 const issueIdentityLinkCode = vi.hoisted(() => vi.fn());
 const releaseBridgeIdentity = vi.hoisted(() => vi.fn());
+const cancelIdentityLinkRequest = vi.hoisted(() => vi.fn());
 
 vi.mock('@renderer/lib/ipc', () => ({
   rpc: {
@@ -39,6 +40,7 @@ vi.mock('@renderer/lib/ipc', () => ({
       claimBridgeIdentity,
       issueIdentityLinkCode,
       releaseBridgeIdentity,
+      cancelIdentityLinkRequest,
     },
   },
   events: { on: () => () => {}, emit: () => {} },
@@ -113,6 +115,7 @@ const PENDING_RESULT = {
     codeExpiresAt: CODE.expiresAt,
   },
   code: CODE,
+  alreadyLinked: false,
 };
 
 const onSuccess = vi.fn();
@@ -131,6 +134,7 @@ beforeEach(() => {
     claimBridgeIdentity,
     issueIdentityLinkCode,
     releaseBridgeIdentity,
+    cancelIdentityLinkRequest,
     onSuccess,
     onClose,
   ]) {
@@ -141,6 +145,7 @@ beforeEach(() => {
   listMyPendingIdentities.mockResolvedValue([]);
   searchBridgeDirectory.mockResolvedValue({ kind: 'results', users: [PERSON], note: null });
   releaseBridgeIdentity.mockResolvedValue(undefined);
+  cancelIdentityLinkRequest.mockResolvedValue({ kind: 'cancelled' });
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 });
 
@@ -261,9 +266,12 @@ describe('linking an account on a server that wants proof', () => {
 
     await click(button(el, 'Cancel link'));
 
-    expect(releaseBridgeIdentity).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: 'ws-1', bridgeId: 'b-slack', identityId: 'eu-1' })
-    );
+    expect(cancelIdentityLinkRequest).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      bridgeId: 'b-slack',
+      identityId: 'eu-1',
+    });
+    expect(releaseBridgeIdentity).not.toHaveBeenCalled();
     expect(el.querySelector('[data-testid="link-code"]')).toBeNull();
     expect(el.textContent).toContain('Search Acme Slack');
     expect(onSuccess).not.toHaveBeenCalled();
@@ -285,6 +293,37 @@ describe('linking an account on a server that wants proof', () => {
     });
   });
 
+  it('stays on the code when there was nothing left to cancel', async () => {
+    claimBridgeIdentity.mockResolvedValue(PENDING_RESULT);
+    cancelIdentityLinkRequest.mockResolvedValue({
+      kind: 'refused',
+      message: 'Nothing is waiting to be confirmed.',
+    });
+    const el = await render();
+    await claimAda(el);
+
+    await click(button(el, 'Cancel link'));
+
+    expect(el.textContent).toContain('Nothing is waiting to be confirmed.');
+    expect(el.querySelector('[data-testid="link-code"]')).not.toBeNull();
+  });
+
+  it('treats re-claiming an unconfirmed link as confirming it, which Cancel leaves standing', async () => {
+    // The server answers such a claim with a code like any other; the link it
+    // already has works meanwhile, so the screen must not talk of finishing a
+    // link, and Cancel must withdraw only the code.
+    claimBridgeIdentity.mockResolvedValue({ ...PENDING_RESULT, alreadyLinked: true });
+    const el = await render();
+    await claimAda(el);
+
+    expect(el.textContent).toContain('Confirm @ada is yours');
+    await click(button(el, 'Cancel confirmation'));
+
+    expect(cancelIdentityLinkRequest).toHaveBeenCalledTimes(1);
+    expect(releaseBridgeIdentity).not.toHaveBeenCalled();
+    expect(el.textContent).toContain('Search Acme Slack');
+  });
+
   it('says when the code has run out, and offers a new one', async () => {
     claimBridgeIdentity.mockResolvedValue({
       ...PENDING_RESULT,
@@ -296,6 +335,24 @@ describe('linking an account on a server that wants proof', () => {
 
     expect(button(el, 'Copy')?.disabled).toBe(true);
     expect(button(el, 'Get a new code')?.disabled).toBe(false);
+  });
+
+  it('keeps looking for the link after the code seems to have run out', async () => {
+    // The expiry is read off this machine's clock. One running fast would
+    // otherwise stop the app noticing a code that was posted in time.
+    claimBridgeIdentity.mockResolvedValue({
+      ...PENDING_RESULT,
+      code: { ...CODE, expiresAt: inMinutes(-1) },
+    });
+    const el = await render();
+    await claimAda(el);
+    await vi.waitFor(() => expect(el.textContent).toContain('This code has expired.'));
+
+    listMyIdentities.mockResolvedValue([LINKED]);
+
+    await vi.waitFor(() => expect(el.textContent).toContain('Linked to @ada.'), {
+      timeout: 6000,
+    });
   });
 });
 
@@ -311,8 +368,8 @@ describe('opening straight on a link that needs its code', () => {
     expect(button(el, 'Cancel link')).toBeDefined();
   });
 
-  it('offers no cancel for a link made before confirming, which works today', async () => {
-    // Cancelling drops the link outright; walking away has to leave it as it was.
+  it('withdraws only the code when confirming a link made before confirming', async () => {
+    // That link works today. Cancel takes back the code, never the link.
     listMyIdentities.mockResolvedValue([{ ...LINKED, verified: false }]);
     issueIdentityLinkCode.mockResolvedValue({ kind: 'issued', code: CODE });
     const el = await render({ identityId: 'eu-1', externalUsername: 'ada', kind: 'unverified' });
@@ -320,8 +377,27 @@ describe('opening straight on a link that needs its code', () => {
 
     expect(el.textContent).toContain('Confirm @ada is yours');
     expect(button(el, 'Cancel link')).toBeUndefined();
-    await click(button(el, 'Close'));
+    await click(button(el, 'Cancel confirmation'));
+
+    expect(cancelIdentityLinkRequest).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      bridgeId: 'b-slack',
+      identityId: 'eu-1',
+    });
+    expect(releaseBridgeIdentity).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes without cancelling anything', async () => {
+    listMyIdentities.mockResolvedValue([{ ...LINKED, verified: false }]);
+    issueIdentityLinkCode.mockResolvedValue({ kind: 'issued', code: CODE });
+    const el = await render({ identityId: 'eu-1', externalUsername: 'ada', kind: 'unverified' });
+    await vi.waitFor(() => expect(el.querySelector('[data-testid="link-code"]')).not.toBeNull());
+
+    await click(button(el, 'Close'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(cancelIdentityLinkRequest).not.toHaveBeenCalled();
     expect(releaseBridgeIdentity).not.toHaveBeenCalled();
   });
 });

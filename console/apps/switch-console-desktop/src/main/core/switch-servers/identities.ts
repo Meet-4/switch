@@ -1,4 +1,5 @@
 import {
+  cancelIdentityLinkRequest,
   claimBridgeIdentity,
   fetchBridges,
   GatewayError,
@@ -8,6 +9,7 @@ import {
 } from '@main/core/switch-servers/gateway-client';
 import type {
   BridgeDirectorySearchResult,
+  CancelLinkRequestResult,
   ClaimIdentityParams,
   ClaimIdentityResult,
   IssueLinkCodeResult,
@@ -68,7 +70,9 @@ export async function searchDirectoryOnServer(
  *
  * A current server leaves the link pending until a code is posted from the
  * account, and answers with that code; one that predates confirming links, or a
- * link already confirmed, comes back claimed.
+ * link already confirmed, comes back claimed. Claiming an account the caller
+ * already holds an unconfirmed link to also comes back pending, and says so:
+ * that link works meanwhile, and cancelling must leave it standing.
  *
  * Nothing here refuses an account other people have claimed — the server
  * allows it, and each claimant is recognised as themselves on the account.
@@ -100,6 +104,7 @@ export async function claimIdentityOnServer(
         kind: 'pending',
         pending: { ...row, requestedByName: null, codeExpiresAt: code?.expiresAt ?? null },
         code,
+        alreadyLinked: (claimed.claimed_by ?? []).some((c) => c.user_id === request.user_id),
       };
     }
     return { kind: 'claimed', identity: { ...row, verified: true } };
@@ -135,6 +140,31 @@ export async function issueLinkCodeOnServer(
     if (cause instanceof GatewayError) {
       if (cause.kind === 'unauthorized') return { kind: 'unauthenticated' };
       if (cause.kind === 'http' && (cause.status === 404 || cause.status === 409)) {
+        return { kind: 'refused', message: cause.detail ?? cause.message };
+      }
+      if (cause.kind === 'network') return { kind: 'error', message: cause.message };
+    }
+    throw cause;
+  }
+}
+
+/**
+ * Withdraw the signed-in user's confirmation waiting on a code, leaving any link
+ * that already works in place. 404 — nothing is waiting, because it was
+ * confirmed or cancelled meanwhile — is the server's to word.
+ */
+export async function cancelLinkRequestOnServer(
+  server: SwitchServer,
+  bridgeId: string,
+  identityId: string
+): Promise<CancelLinkRequestResult> {
+  try {
+    await cancelIdentityLinkRequest(server, bridgeId, identityId);
+    return { kind: 'cancelled' };
+  } catch (cause) {
+    if (cause instanceof GatewayError) {
+      if (cause.kind === 'unauthorized') return { kind: 'unauthenticated' };
+      if (cause.kind === 'http' && cause.status === 404) {
         return { kind: 'refused', message: cause.detail ?? cause.message };
       }
       if (cause.kind === 'network') return { kind: 'error', message: cause.message };

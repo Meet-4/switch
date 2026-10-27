@@ -54,6 +54,7 @@ import { orderBridges } from './messaging-apps-order';
 import {
   hasUnlinkedMessagingApp,
   identityLinkOrderingNote,
+  linkedIdentityOn,
   unrecognisedMessagingApps,
   unrecognisedMessagingAppsMessage,
 } from './messaging-apps-warning';
@@ -443,7 +444,7 @@ export function MessagingAppRow({
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
 
-  const identity = identities?.find((i) => i.bridgeId === bridge.id) ?? null;
+  const identity = identities === null ? null : linkedIdentityOn(bridge.id, identities);
   // Only while nothing is linked here: a link that counts says more about the
   // app than one still waiting for its code.
   const waiting =
@@ -512,12 +513,34 @@ export function MessagingAppRow({
       });
       onReleased();
     } catch (cause) {
-      setReleaseError(
-        failureText(
-          cause,
-          waiting !== null ? 'Could not cancel this link.' : 'Could not unlink this account.'
-        )
-      );
+      setReleaseError(failureText(cause, 'Could not unlink this account.'));
+    } finally {
+      setReleasing(false);
+    }
+  };
+
+  // Withdraws only the waiting confirmation. Unlinking is `release`, and is
+  // never what Cancel means.
+  const cancelRequest = async (identityId: string) => {
+    if (workspaceId === null) return;
+    setReleasing(true);
+    setReleaseError(null);
+    try {
+      const result = await rpc.workspaces.cancelIdentityLinkRequest({
+        workspaceId,
+        bridgeId: bridge.id,
+        identityId,
+      });
+      // Re-read either way: a refusal means it was confirmed or cancelled
+      // meanwhile, and the row should say which.
+      onReleased();
+      if (result.kind === 'unauthenticated') {
+        setReleaseError('Your session for this server expired. Sign in again, then retry.');
+      } else if (result.kind !== 'cancelled') {
+        setReleaseError(result.message);
+      }
+    } catch (cause) {
+      setReleaseError(failureText(cause, 'Could not cancel this link.'));
     } finally {
       setReleasing(false);
     }
@@ -694,7 +717,7 @@ export function MessagingAppRow({
               </DropdownMenuItem>
             )}
             {waiting !== null && (
-              <DropdownMenuItem onClick={() => void release(waiting.id)}>
+              <DropdownMenuItem onClick={() => void cancelRequest(waiting.id)}>
                 <X className="size-4" />
                 Cancel link to {accountHandle(waiting.externalUsername)}
               </DropdownMenuItem>

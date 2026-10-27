@@ -107,7 +107,7 @@ export const BridgeIdentitySearch = observer(function BridgeIdentitySearch({
           {
             identityId: result.pending.id,
             externalUsername: result.pending.externalUsername,
-            kind: 'pending',
+            kind: result.alreadyLinked ? 'unverified' : 'pending',
           },
           result.code
         );

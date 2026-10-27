@@ -810,6 +810,11 @@ class ClaimIdentityRequest(BaseModel):
     # Omitted means "claim it for me"; only an admin may claim on behalf of
     # someone else.
     user_id: str | None = None
+    # That the caller knows the link will wait for the account to confirm it
+    # (CHOO-3881). A Console from before then leaves it out and would report
+    # a link that does not count as made, so the claim is refused with a
+    # reason it shows instead.
+    expects_confirmation: bool = False
 
 
 class LinkedIdentity(BaseModel):
