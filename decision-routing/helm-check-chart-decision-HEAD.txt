@@ -1,0 +1,7 @@
+ok   test_off_by_default_renders_nothing_and_sets_no_endpoint
+ok   test_on_runs_the_service_and_points_switch_core_at_it
+ok   test_bedrock_and_the_pod_role
+ok   test_without_a_model_server_there_is_no_gpu_or_volume
+ok   test_network_policy_can_be_left_out
+ok   test_an_endpoint_elsewhere
+ok   test_refuses_contradictions

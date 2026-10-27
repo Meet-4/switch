@@ -1,0 +1,54 @@
+# helm template rel deploy/remote/helm/switch -f render-check-values.yaml --set decision.enabled=true (chart at HEAD 9da9f9751)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rel-decision
+  labels:
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 0.0.0-dev
+    helm.sh/chart: switch-0.0.0-dev
+    app.kubernetes.io/component: decision
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: rel
+      app.kubernetes.io/component: decision
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/instance: rel
+          app.kubernetes.io/component: switch-core
+    ports:
+    - protocol: TCP
+      port: 8230
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rel-decision
+  labels:
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: 0.0.0-dev
+    helm.sh/chart: switch-0.0.0-dev
+    app.kubernetes.io/component: decision
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8230
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app.kubernetes.io/instance: rel
+    app.kubernetes.io/component: decision
+
+# decision pod container decision: env=[('PORT', '8230'), ('DECISION_BACKEND', 'llamacpp'), ('DECISION_MODEL', 'qwen3.5-4b-q4_k_m'), ('LLAMACPP_URL', 'http://127.0.0.1:8300'), ('DECISION_BEDROCK_ENABLED', '0')] limits={'cpu': '1000m', 'memory': '1Gi'}
+# decision pod container model-server: env=[('MODEL_PATH', '/models/Qwen3.5-4B-Q4_K_M.gguf')] limits={'memory': '14Gi', 'nvidia.com/gpu': 1}
+# Deployment rel-switch-core / switch-core: {'name': 'DECISION_ENDPOINT_URL', 'value': 'http://rel-decision:8230'}

@@ -1,0 +1,566 @@
+[
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116090514250000",
+   "observedTimeUnixNano": "1793116090514250000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 1258.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "agent"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116108954261000",
+   "observedTimeUnixNano": "1793116108954261000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 822.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "agent"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116121272522000",
+   "observedTimeUnixNano": "1793116121272522000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 970.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "none"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116199018164000",
+   "observedTimeUnixNano": "1793116199018164000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "haiku_anthropic"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 4110.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "agent"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116214987887000",
+   "observedTimeUnixNano": "1793116214987887000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 717.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "agent"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116272293321000",
+   "observedTimeUnixNano": "1793116272293321000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "haiku_anthropic"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 2941.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "agent"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116425140532000",
+   "observedTimeUnixNano": "1793116425140532000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_failed"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_failed"
+     }
+    },
+    {
+     "key": "reason",
+     "value": {
+      "stringValue": "unreachable"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_failed"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793116441079369000",
+   "observedTimeUnixNano": "1793116441079369000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_failed"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_failed"
+     }
+    },
+    {
+     "key": "reason",
+     "value": {
+      "stringValue": "unreachable"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_failed"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793122275282438000",
+   "observedTimeUnixNano": "1793122275282438000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_failed"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_failed"
+     }
+    },
+    {
+     "key": "reason",
+     "value": {
+      "stringValue": "unreachable"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_failed"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793122291345451000",
+   "observedTimeUnixNano": "1793122291345451000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_failed"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_failed"
+     }
+    },
+    {
+     "key": "reason",
+     "value": {
+      "stringValue": "unreachable"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_failed"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793122346376650000",
+   "observedTimeUnixNano": "1793122346376650000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 1924.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "agent"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ },
+ {
+  "resource_attribute_keys": [
+   "flint.client_id",
+   "flint_env",
+   "flint_internal",
+   "service.name",
+   "service.version"
+  ],
+  "record": {
+   "timeUnixNano": "1793122454895619000",
+   "observedTimeUnixNano": "1793122454895619000",
+   "severityNumber": 9,
+   "severityText": "INFO",
+   "body": {
+    "stringValue": "switch_core.decision_made"
+   },
+   "attributes": [
+    {
+     "key": "backend",
+     "value": {
+      "stringValue": "server_default"
+     }
+    },
+    {
+     "key": "confidence",
+     "value": {
+      "stringValue": "0.9_1.0"
+     }
+    },
+    {
+     "key": "event.name",
+     "value": {
+      "stringValue": "switch_core.decision_made"
+     }
+    },
+    {
+     "key": "latency_ms",
+     "value": {
+      "doubleValue": 80.0
+     }
+    },
+    {
+     "key": "outcome",
+     "value": {
+      "stringValue": "agent"
+     }
+    }
+   ],
+   "eventName": "switch_core.decision_made"
+  }
+ }
+]
