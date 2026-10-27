@@ -46,7 +46,7 @@ export interface AgentSummary {
  * ```json
  * { "type": "message", "room_id": "…", "bridge_id": "…",
  *   "channel_type": "channel_public",
- *   "payload": { "addressed": true, "sender": "@switch-mattermost-…:localhost",
+ *   "payload": { "addressed": true, "sender": "@switch-member-…:localhost",
  *                "sender_name": "user", "message_id": "$…",
  *                "body": "@agent hello", "timestamp": 1788…, "thread_id": null,
  *                "attachments": [] } }
@@ -213,45 +213,6 @@ export class SwitchClient {
     };
   }
 
-  /**
-   * `POST /gateway/rooms` — create a Switch room and let the bridge provision
-   * the platform channel for it.
-   *
-   * This is the harness's room-creation path, and the choice is not arbitrary.
-   * The "add the agent's bot to a channel" route relies on some *other* agent's
-   * websocket witnessing the join (`_handle_user_added` in the Mattermost
-   * adapter), so adding the FIRST bot to a brand-new channel is witnessed by
-   * nobody and no room is ever created — verified against a live server, see
-   * README.md. Creating the room here makes Switch create the channel and add
-   * the bot itself, which is deterministic.
-   *
-   * `userNames` are platform usernames added to the channel — the harness adds
-   * itself, since it has to be a channel member to post as the human.
-   */
-  async createRoom(params: {
-    name: string;
-    description: string;
-    bridgeId: string;
-    agentNames: string[];
-    userNames?: string[];
-  }): Promise<RoomDetail> {
-    const row = await this.gateway<RawRoom>('POST', '/rooms', {
-      name: params.name,
-      description: params.description,
-      bridge_id: params.bridgeId,
-      agent_names: params.agentNames,
-      user_names: params.userNames ?? [],
-      channel_type: 'channel_public',
-      internal_only: false,
-    });
-    return {
-      ...toRoomSummary(row),
-      externalChannelId: row.external_channel_id ?? null,
-      matrixRoomId: row.matrix_room_id ?? null,
-      agentIds: row.agent_ids ?? [],
-    };
-  }
-
   async deleteRoom(roomId: string): Promise<void> {
     await this.gateway('DELETE', `/rooms/${roomId}`);
   }
@@ -306,83 +267,9 @@ export class SwitchClient {
     await this.gateway('PUT', `/agents/${agentId}/addressing-policy`, { policy: null });
   }
 
-  /**
-   * `POST /gateway/collaborations/{bridge}/identities` on the default bridge
-   * of `bridgeType` — link a chat account to the signed-in Switch user, so
-   * Switch can recognise that person in a room (what the rename and delete
-   * chat commands check).
-   */
-  async claimIdentity(
-    bridgeType: string,
-    externalUserId: string,
-    username: string
-  ): Promise<void> {
-    const bridges = await this.gateway<
-      { bridge_id: string; bridge_type: string; is_default?: boolean }[]
-    >('GET', '/collaborations');
-    const ofType = bridges.filter((row) => row.bridge_type === bridgeType);
-    const bridge = ofType.find((row) => row.is_default) ?? ofType[0];
-    if (!bridge) throw new Error(`No ${bridgeType} collaboration bridge on this Switch server`);
-    await this.gateway('POST', `/collaborations/${bridge.bridge_id}/identities`, {
-      external_user_id: externalUserId,
-      username,
-      user_id: null,
-    });
-  }
-
   async listAgents(): Promise<AgentSummary[]> {
     const rows = await this.gateway<{ id: string; name: string }[]>('GET', '/agents');
     return rows.map((row) => ({ id: row.id, name: row.name }));
-  }
-
-  /** The bridge id of the default collaboration bridge of `type`. */
-  async defaultBridgeId(type: string): Promise<string> {
-    const rows = await this.gateway<
-      { id: string; bridge_type: string; is_default?: boolean; enabled?: boolean }[]
-    >('GET', '/collaborations');
-    const ofType = rows.filter((row) => row.bridge_type === type);
-    if (ofType.length === 0) {
-      throw new Error(`No ${type} collaboration bridge registered on this Switch server`);
-    }
-    return (ofType.find((row) => row.is_default) ?? ofType[0]!).id;
-  }
-
-  /**
-   * Find the Switch room bound to a given external (Mattermost) channel id.
-   * The room list does not carry `external_channel_id`, so each candidate room
-   * on the bridge is read in full — the set is small on a dev server, and the
-   * alternative (matching on display name) is ambiguous.
-   */
-  async findRoomByExternalChannel(
-    bridgeId: string,
-    externalChannelId: string
-  ): Promise<RoomDetail | null> {
-    const rooms = await this.listRooms();
-    for (const room of rooms) {
-      if (room.bridgeId !== bridgeId || room.archived) continue;
-      const detail = await this.getRoom(room.id);
-      if (detail.externalChannelId === externalChannelId) return detail;
-    }
-    return null;
-  }
-
-  /** Poll {@link findRoomByExternalChannel} until the bridge has created the room. */
-  async waitForRoomByExternalChannel(
-    bridgeId: string,
-    externalChannelId: string,
-    deadlineMs: number
-  ): Promise<RoomDetail> {
-    const until = Date.now() + deadlineMs;
-    let last: RoomDetail | null = null;
-    while (Date.now() < until) {
-      last = await this.findRoomByExternalChannel(bridgeId, externalChannelId);
-      if (last) return last;
-      await sleep(2_000);
-    }
-    throw new Error(
-      `No Switch room appeared for Mattermost channel ${externalChannelId} within ${deadlineMs}ms. ` +
-        `Is the Mattermost bridge running and is the agent's bot a member of the channel?`
-    );
   }
 
   // ── agent bridge: registration ────────────────────────────────────────────
@@ -392,12 +279,6 @@ export class SwitchClient {
    * auth). `agentType` is one of the gateway's known types — `claude-code`,
    * `codex`, `opencode`, `cursor` or `antigravity` — and `options` is that
    * type's option schema, which for OpenCode is `{ auto_session, repo_dir }`.
-   *
-   * Registration is also what mints the agent's Mattermost bot account: the
-   * protocol service calls `create_agent_identity` on every collaboration
-   * bridge, and the Mattermost adapter creates a bot whose **username is the
-   * agent name verbatim**. So the agent must be registered before its bot can
-   * be added to a channel.
    */
   async registerKnownAgent(params: {
     agentType: 'opencode' | 'codex' | 'claude-code' | 'antigravity' | 'cursor';
@@ -488,28 +369,8 @@ export class SwitchClient {
   }
 
   /**
-   * `GET /agents/{id}/rooms/{room_id}/history?limit=` as the agent — the room's
-   * recent messages, addressed or not. Unlike the notification stream this shows
-   * ordinary channel chatter, which is what makes it usable as a bridge-liveness
-   * probe that does not wake the agent.
-   */
-  async roomHistory(
-    agent: RegisteredAgent,
-    roomId: string,
-    limit = 20
-  ): Promise<{ sender: string; sender_name: string; body: string; timestamp: number | null }[]> {
-    const body = await this.request<{
-      events: { sender: string; sender_name: string; body: string; timestamp: number | null }[];
-    }>('GET', `/agents/${agent.id}/rooms/${roomId}/history?limit=${limit}`, {
-      token: agent.apiKey,
-    });
-    return body.events;
-  }
-
-  /**
    * `POST /agents/{id}/message` with `{room_id, content}` — post into a room as
-   * the agent. The bridge relays it to Mattermost as the agent's bot. Returns
-   * the Matrix event id.
+   * the agent. Returns the event id.
    */
   async sendMessage(agent: RegisteredAgent, roomId: string, content: string): Promise<string> {
     const body = await this.request<{ ok: boolean; event_id: string }>(

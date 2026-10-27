@@ -10,11 +10,11 @@ import {
 import { formatResultsTable, SCENARIOS, type ScenarioResult } from './scenarios.ts';
 
 /**
- * The suite. One throwaway agent, one Mattermost channel, four scenarios run in
+ * The suite. One throwaway agent, one in-Console chat, four scenarios run in
  * order against them, then teardown and a summary table.
  *
  * It **skips** — never fails — when the machine is not set up for it:
- * `SWITCH_E2E=1` unset, configuration missing, or Switch/Mattermost unreachable.
+ * `SWITCH_E2E=1` unset, configuration missing, or Switch unreachable.
  * The reason is printed, so a skip is never mysterious.
  *
  * It **fails** when the stack is there and the agent does not behave. For a
@@ -38,8 +38,6 @@ beforeAll(async () => {
       `Switch Console end-to-end run ${harness.runId}`,
       `  ${describeEnv(resolved.env)}`,
       `  agent    ${harness.agent.name} (${harness.agent.id})`,
-      `  bot      @${harness.bot.username} (${harness.bot.id})`,
-      `  channel  ${harness.channel.name} (${harness.channel.id})`,
       `  room     ${harness.room.name} (${harness.room.id})`,
       '',
       `  A Switch Console session must now be running for '${harness.agent.name}'.`,
@@ -74,7 +72,10 @@ describe('Switch Console provider-backed session, end to end', () => {
         console.log(
           `${result.name} transcript:\n` +
             result.transcript
-              .map((post) => `    [${post.user_id === harness!.bot.id ? 'bot ' : 'user'}] ${post.message}`)
+              .map(
+                (post) =>
+                  `    [${post.sender.agentId === harness!.agent.id ? 'agent' : 'user '}] ${post.body}`
+              )
               .join('\n')
         );
       }

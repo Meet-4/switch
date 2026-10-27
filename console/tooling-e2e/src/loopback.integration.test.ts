@@ -7,15 +7,15 @@ import { eventText } from './switch-client.ts';
  * The harness's own plumbing, proved against a live stack with **no Switch
  * Console and no model in the loop**: the harness plays both parts.
  *
- * 1. register an agent, create a channel, add the agent's bot to it, and confirm
- *    Switch provisions a room for that channel;
- * 2. post `@agent …` as a human and confirm the addressed message reaches the
- *    agent-facing notification stream;
+ * 1. register an agent, open an in-Console group chat with it, and confirm the
+ *    room has the agent and no bridge;
+ * 2. post `@agent …` as a human through the chat and confirm the addressed
+ *    message reaches the agent-facing notification stream;
  * 3. `POST /agents/{id}/message` as the agent and confirm it lands back in the
- *    Mattermost channel as the bot.
+ *    chat as the agent.
  *
  * If this file passes and `run.integration.test.ts` fails, the fault is in the
- * console session, not in Switch, the bridge, or the harness.
+ * console session, not in Switch or the harness.
  */
 
 let harness: Harness | null = null;
@@ -31,7 +31,7 @@ beforeAll(async () => {
   harness = await setupHarness(resolved.env, { autoSession: false, prefix: 'e2e-loop' });
   console.log(
     `loopback: ${describeEnv(resolved.env)} agent=${harness.agent.name} (${harness.agent.id}) ` +
-      `channel=${harness.channel.name} (${harness.channel.id}) room=${harness.room.id}`
+      `room=${harness.room.name} (${harness.room.id})`
   );
 }, 300_000);
 
@@ -39,25 +39,21 @@ afterAll(async () => {
   await teardownHarness(harness);
 });
 
-describe('Switch <-> Mattermost loopback', () => {
-  it('provisions a Switch room when the agent bot joins a Mattermost channel', () => {
+describe('Switch <-> in-Console chat loopback', () => {
+  it('opens a Switch room with the agent and no bridge for an in-Console chat', () => {
     if (skip) return void console.log(`SKIPPED: ${skip}`);
     expect(harness).not.toBeNull();
-    expect(harness!.room.externalChannelId).toBe(harness!.channel.id);
+    expect(harness!.room.bridgeId).toBeNull();
     expect(harness!.room.agentIds).toContain(harness!.agent.id);
   });
 
-  it('delivers an addressed channel message to the agent, and the agent reply back to the channel', async () => {
+  it('delivers an addressed chat message to the agent, and the agent reply back to the chat', async () => {
     if (skip) return void console.log(`SKIPPED: ${skip}`);
     const h = harness!;
     const marker = `SWITCH_E2E_${h.runId.toUpperCase()}`;
 
-    const sinceMs = Date.now();
-    const posted = await h.mattermost.post({
-      channelId: h.channel.id,
-      message: `@${h.agent.name} hello ${marker}`,
-    });
-    console.log(`loopback: posted ${posted.id} as ${h.human.username}`);
+    const posted = await h.chat.send(h.room.id, `@${h.agent.name} hello ${marker}`);
+    console.log(`loopback: posted ${posted.messageId} as ${h.human.name}`);
 
     // ── inbound: room -> Switch -> agent ────────────────────────────────────
     const inbound = await h.switch.waitForNotification(
@@ -82,21 +78,21 @@ describe('Switch <-> Mattermost loopback', () => {
     const eventId = await h.switch.sendMessage(h.agent, h.room.id, reply);
     expect(eventId).toBeTruthy();
 
-    const outbound = await h.mattermost.waitForPost({
-      channelId: h.channel.id,
-      fromUserId: h.bot.id,
-      predicate: (post) => post.message.includes(marker),
-      sinceMs,
+    const outbound = await h.chat.waitForMessage({
+      roomId: h.room.id,
+      fromAgentId: h.agent.id,
+      predicate: (message) => message.body.includes(marker),
+      afterSeq: posted.seq,
       deadlineMs: 120_000,
     });
     if (!outbound.match) {
       throw new Error(
-        `Agent reply never appeared in Mattermost as bot ${h.bot.username}. Transcript: ` +
-          outbound.transcript.map((p) => `${p.user_id}: ${p.message}`).join(' | ')
+        `Agent reply never appeared in the chat as ${h.agent.name}. Transcript: ` +
+          outbound.transcript.map((m) => `${m.sender.name}: ${m.body}`).join(' | ')
       );
     }
     console.log(
-      `loopback: bot post ${outbound.match.id} (matrix event ${eventId}) — round trip closed`
+      `loopback: chat message ${outbound.match.messageId} (event ${eventId}) — round trip closed`
     );
   }, 400_000);
 });

@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { ConsoleChatClient, type ChatUser } from './console-chat-client.ts';
 import {
   removeAgentCredentials,
   removeClaudeAgentDefinition,
@@ -6,30 +7,20 @@ import {
   writeClaudeAgentDefinition,
 } from './console-credentials.ts';
 import { loadEnv, shortId, type HarnessAgentType, type HarnessEnv } from './env.ts';
-import {
-  isValidMattermostUsername,
-  MattermostClient,
-  type MattermostChannel,
-  type MattermostUser,
-} from './mattermost-client.ts';
 import { sleep, SwitchClient, type RegisteredAgent, type RoomDetail } from './switch-client.ts';
 
 /**
- * Everything a scenario needs: the two clients, the throwaway agent, the
- * Mattermost channel it was invited into, and the Switch room the bridge created
- * for that channel.
+ * Everything a scenario needs: the two clients, the throwaway agent, and the
+ * in-Console group chat (a Switch room with no bridge) it was added to.
  */
 export interface Harness {
   env: HarnessEnv;
   switch: SwitchClient;
-  mattermost: MattermostClient;
+  chat: ConsoleChatClient;
   agent: RegisteredAgent;
-  /** The agent's Mattermost bot account — `username === agent.name`. */
-  bot: MattermostUser;
-  channel: MattermostChannel;
   room: RoomDetail;
-  /** The human user the harness posts as. */
-  human: MattermostUser;
+  /** The human user the harness posts as: the gateway admin. */
+  human: ChatUser;
   runId: string;
   /** Where the agent's credentials were written, when `SWITCH_E2E_AGENT_DIR` is set. */
   credentialsPath?: string;
@@ -42,11 +33,11 @@ export interface SetupOptions {
    * plays the agent itself.
    */
   autoSession?: boolean;
-  /** Prefix for the agent name and channel name. Must stay short (see below). */
+  /** Prefix for the agent name. */
   prefix?: string;
 }
 
-/** The name prefix per agent type, kept inside Mattermost's 22-character cap. */
+/** The name prefix per agent type. */
 const PREFIX_BY_AGENT_TYPE: Record<HarnessAgentType, string> = {
   opencode: 'e2e-opencode',
   antigravity: 'e2e-antigravity',
@@ -55,22 +46,9 @@ const PREFIX_BY_AGENT_TYPE: Record<HarnessAgentType, string> = {
   codex: 'e2e-codex',
 };
 
-/**
- * Why the name is built this way: the agent name becomes a **Mattermost bot
- * username** verbatim, and Mattermost caps usernames at 22 characters and allows
- * only `[a-z0-9._-]`. `e2e-opencode-` (13) + a 6-character run id fits with room
- * to spare; anything longer silently fails bot creation on the bridge side and
- * the room is then never provisioned.
- */
+/** `e2e-` prefixed so the cleanup script finds it after a failed run. */
 export function agentNameFor(runId: string, prefix = PREFIX_BY_AGENT_TYPE.opencode): string {
-  const name = `${prefix}-${runId}`;
-  if (!isValidMattermostUsername(name)) {
-    throw new Error(
-      `Derived agent name '${name}' is not a valid Mattermost bot username ` +
-        `(lowercase, 3-22 chars, [a-z0-9._-]). Shorten the prefix.`
-    );
-  }
-  return name;
+  return `${prefix}-${runId}`;
 }
 
 /**
@@ -108,29 +86,12 @@ export async function resolveSkip(): Promise<{ skip: SkipReason | null; env: Har
     };
   }
 
-  const mattermost = new MattermostClient({ url: env.mattermostUrl, token: env.mattermostToken });
-  try {
-    await mattermost.me();
-  } catch (error) {
-    return {
-      skip: `Mattermost at ${env.mattermostUrl} is unreachable or MATTERMOST_TOKEN is invalid: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      env: null,
-    };
-  }
-
   return { skip: null, env };
 }
 
 /**
- * Register a throwaway agent, create a channel, invite the agent's bot into it,
- * and wait for Switch to provision the room.
- *
- * Order matters and is not interchangeable: the bot account only exists once the
- * agent is registered (registration is what calls `create_agent_identity` on
- * every collaboration bridge), and the Switch room only exists once that bot is
- * a channel member.
+ * Register a throwaway agent and open an in-Console group chat with it, as
+ * Switch Console does: the chat is a Switch room with no bridge.
  */
 export async function setupHarness(env: HarnessEnv, options: SetupOptions = {}): Promise<Harness> {
   const reused = await readManifest(env.manifestPath);
@@ -145,13 +106,8 @@ export async function setupHarness(env: HarnessEnv, options: SetupOptions = {}):
     gatewayAdminEmail: env.gatewayAdminEmail,
     gatewayAdminPassword: env.gatewayAdminPassword,
   });
-  const mattermost = new MattermostClient({ url: env.mattermostUrl, token: env.mattermostToken });
-
-  const human = await mattermost.me();
-  const bridgeId = await switchClient.defaultBridgeId('mattermost');
-  // Resolved even though the room-create path does not need it: it fails fast
-  // and clearly when MATTERMOST_TEAM names a team that does not exist.
-  await mattermost.findTeam(env.mattermostTeam);
+  const chat = chatClientFor(env, switchClient);
+  const human = await chat.me();
 
   // `ClaudeCodeOptions` and `OpencodeOptions` agree on the two keys used here
   // (`auto_session`, `repo_dir`), so the payload is the same for both types.
@@ -165,33 +121,17 @@ export async function setupHarness(env: HarnessEnv, options: SetupOptions = {}):
     },
   });
 
-  // Registration is what mints the bot; wait for it so a later `@name` mention
-  // has something to resolve to.
-  const bot = await mattermost.waitForBotUser(agent.name, 60_000);
+  // A registered agent answers only its owner by default, and it has none; a
+  // chat can only be opened with an agent the person may address.
+  await switchClient.openAddressing(agent.id);
+  const roomId = await chat.createGroupChat({ name: `e2e-${runId}`, agentIds: [agent.id] });
+  const room = await switchClient.getRoom(roomId);
 
-  const room = await switchClient.createRoom({
-    name: `e2e-${runId}`,
-    description: `Switch Console end-to-end harness (run ${runId}). Safe to delete.`,
-    bridgeId,
-    agentNames: [agent.name],
-    userNames: [human.username],
-  });
-
-  if (!room.externalChannelId) {
-    throw new Error(
-      `Switch room ${room.id} was created without a Mattermost channel — ` +
-        `the collaboration bridge did not provision one.`
-    );
-  }
-
-  const channel = await mattermost.getChannel(room.externalChannelId);
   const harness: Harness = {
     env,
     switch: switchClient,
-    mattermost,
+    chat,
     agent,
-    bot,
-    channel,
     room,
     human,
     runId,
@@ -230,9 +170,15 @@ export async function setupHarness(env: HarnessEnv, options: SetupOptions = {}):
     }
   }
 
-  await waitForBridgeReady(harness);
   await writeManifest(env.manifestPath, harness);
   return harness;
+}
+
+function chatClientFor(env: HarnessEnv, switchClient: SwitchClient): ConsoleChatClient {
+  return new ConsoleChatClient({
+    apiUrl: env.switchApiUrl,
+    cookie: () => switchClient.gatewayLogin(),
+  });
 }
 
 /**
@@ -249,7 +195,6 @@ export interface HarnessManifest {
   runId: string;
   agent: RegisteredAgent;
   roomId: string;
-  channelId: string;
 }
 
 async function writeManifest(path: string | null, harness: Harness): Promise<void> {
@@ -258,7 +203,6 @@ async function writeManifest(path: string | null, harness: Harness): Promise<voi
     runId: harness.runId,
     agent: harness.agent,
     roomId: harness.room.id,
-    channelId: harness.channel.id,
   };
   await fs.writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
@@ -272,11 +216,7 @@ async function readManifest(path: string | null): Promise<HarnessManifest | null
   }
 }
 
-/**
- * Rebuild a harness around an agent and room a previous process created. The
- * bridge-readiness probe still runs: this process has proved nothing about the
- * bot's websocket, and reusing an agent is not evidence its socket is up now.
- */
+/** Rebuild a harness around an agent and room a previous process created. */
 async function reuseHarness(env: HarnessEnv, manifest: HarnessManifest): Promise<Harness> {
   const switchClient = new SwitchClient({
     apiUrl: env.switchApiUrl,
@@ -284,65 +224,17 @@ async function reuseHarness(env: HarnessEnv, manifest: HarnessManifest): Promise
     gatewayAdminEmail: env.gatewayAdminEmail,
     gatewayAdminPassword: env.gatewayAdminPassword,
   });
-  const mattermost = new MattermostClient({ url: env.mattermostUrl, token: env.mattermostToken });
+  const chat = chatClientFor(env, switchClient);
 
-  const harness: Harness = {
+  return {
     env,
     switch: switchClient,
-    mattermost,
+    chat,
     agent: manifest.agent,
-    bot: await mattermost.waitForBotUser(manifest.agent.name, 30_000),
-    channel: await mattermost.getChannel(manifest.channelId),
     room: await switchClient.getRoom(manifest.roomId),
-    human: await mattermost.me(),
+    human: await chat.me(),
     runId: manifest.runId,
   };
-
-  await waitForBridgeReady(harness);
-  return harness;
-}
-
-/**
- * Block until a plain channel message actually reaches Switch.
- *
- * This is not belt-and-braces. The Mattermost adapter delivers inbound posts off
- * the *agent bot's own websocket*, and that socket is opened on a background
- * thread after the bot account is created — the server log shows
- * `Websocket authentification OK` arriving after the room already exists. A
- * message posted in that window is silently dropped, which shows up later as a
- * scenario that times out for no visible reason.
- *
- * The probe is deliberately **unaddressed**: it proves Mattermost → Switch
- * delivery without putting an `@agent` mention on the wire, so it cannot spawn a
- * console session or consume a turn. It is read back through the agent's room
- * history, which carries ordinary chatter, rather than the notification stream,
- * which by design carries only addressed messages.
- */
-export async function waitForBridgeReady(harness: Harness, deadlineMs = 120_000): Promise<void> {
-  const probe = `switch-e2e-bridge-probe ${harness.runId}`;
-  const until = Date.now() + deadlineMs;
-  let posted = false;
-
-  while (Date.now() < until) {
-    if (!posted) {
-      await harness.mattermost.post({ channelId: harness.channel.id, message: probe });
-      posted = true;
-    }
-    const history = await harness.switch.roomHistory(harness.agent, harness.room.id, 50);
-    if (history.some((event) => event.body.includes(probe))) return;
-
-    // Re-post rather than only re-read: if the socket was down when the first
-    // one went out, that message is gone for good and no amount of polling
-    // will produce it.
-    await sleep(5_000);
-    posted = false;
-  }
-
-  throw new Error(
-    `Mattermost -> Switch delivery never came up for room ${harness.room.id} ` +
-      `(channel ${harness.channel.id}) within ${deadlineMs}ms: a plain channel message ` +
-      `never reached the agent's room history. The agent bot's websocket is probably not connected.`
-  );
 }
 
 /** Statuses that mean a session is attending — or is about to be spawned for — the room. */
@@ -373,7 +265,7 @@ export async function waitForSession(harness: Harness, deadlineMs = 120_000): Pr
 }
 
 /**
- * Delete the agent and archive the channel. Never throws: teardown failures are
+ * Delete the room and the agent. Never throws: teardown failures are
  * reported (so a leak is visible and can be cleaned up by hand) but must not
  * mask the result of the run.
  */
@@ -385,7 +277,7 @@ export async function teardownHarness(
   if (harness.env.keepArtifacts) {
     log(
       `SWITCH_E2E_KEEP=1 — leaving agent '${harness.agent.name}' (${harness.agent.id}) and ` +
-        `channel '${harness.channel.name}' (${harness.channel.id}) in place.`
+        `room '${harness.room.name}' (${harness.room.id}) in place.`
     );
     return;
   }
@@ -423,13 +315,5 @@ export async function teardownHarness(
       `teardown: failed to delete agent ${harness.agent.name} (${harness.agent.id}) — ` +
         `delete it by hand: ${error instanceof Error ? error.message : String(error)}`
     );
-  }
-
-  // Deleting the room usually takes the channel with it; archive is a no-op
-  // then, and the safety net when it does not.
-  try {
-    await harness.mattermost.archiveChannel(harness.channel.id);
-  } catch {
-    // Already gone — nothing to report.
   }
 }

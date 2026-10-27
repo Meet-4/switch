@@ -28,9 +28,6 @@ export interface HarnessEnv {
   gatewayAdminEmail: string;
   gatewayAdminPassword: string;
   agentRegistrationToken: string;
-  mattermostUrl: string;
-  mattermostToken: string;
-  mattermostTeam: string;
   /** Working directory the console session under test runs OpenCode from. */
   agentRepoDir: string | null;
   /**
@@ -40,7 +37,7 @@ export interface HarnessEnv {
    * start the console, then run the scenarios against the same agent.
    */
   manifestPath: string | null;
-  /** Leave the channel and agent behind after the run (for debugging). */
+  /** Leave the room and agent behind after the run (for debugging). */
   keepArtifacts: boolean;
   /** Which agent type to register, and so which provider's runtime is exercised. */
   agentType: HarnessAgentType;
@@ -113,9 +110,6 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     SWITCH_GATEWAY_ADMIN_EMAIL: get('SWITCH_GATEWAY_ADMIN_EMAIL'),
     SWITCH_GATEWAY_ADMIN_PASSWORD: get('SWITCH_GATEWAY_ADMIN_PASSWORD'),
     SWITCH_AGENT_REGISTRATION_TOKEN: get('SWITCH_AGENT_REGISTRATION_TOKEN'),
-    MATTERMOST_URL: get('MATTERMOST_URL'),
-    MATTERMOST_TOKEN: get('MATTERMOST_TOKEN'),
-    MATTERMOST_TEAM: get('MATTERMOST_TEAM'),
   };
 
   const missing = Object.entries(required)
@@ -128,9 +122,6 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     gatewayAdminEmail: required.SWITCH_GATEWAY_ADMIN_EMAIL as string,
     gatewayAdminPassword: required.SWITCH_GATEWAY_ADMIN_PASSWORD as string,
     agentRegistrationToken: required.SWITCH_AGENT_REGISTRATION_TOKEN as string,
-    mattermostUrl: stripTrailingSlash(required.MATTERMOST_URL as string),
-    mattermostToken: required.MATTERMOST_TOKEN as string,
-    mattermostTeam: required.MATTERMOST_TEAM as string,
     agentRepoDir: get('SWITCH_E2E_AGENT_DIR') ?? null,
     manifestPath: get('SWITCH_E2E_MANIFEST') ?? null,
     keepArtifacts: (get('SWITCH_E2E_KEEP') ?? '') === '1',
@@ -162,7 +153,7 @@ export function stripTrailingSlash(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url;
 }
 
-/** Lowercase, filesystem- and Mattermost-username-safe run id. */
+/** Lowercase, filesystem- and agent-name-safe run id. */
 export function shortId(): string {
   return Math.random().toString(36).slice(2, 8);
 }
@@ -173,5 +164,5 @@ export function shortId(): string {
  * pasted into a ticket.
  */
 export function describeEnv(env: HarnessEnv): string {
-  return `switch=${env.switchApiUrl} mattermost=${env.mattermostUrl} team=${env.mattermostTeam}`;
+  return `switch=${env.switchApiUrl}`;
 }
