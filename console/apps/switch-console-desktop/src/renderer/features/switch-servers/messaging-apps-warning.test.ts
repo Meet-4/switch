@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { LinkedIdentity, RemoteBridge } from '@shared/core/switch-servers/switch-servers';
+import type {
+  LinkedIdentity,
+  PendingIdentity,
+  RemoteBridge,
+} from '@shared/core/switch-servers/switch-servers';
 import {
+  accountLinkPrompts,
   hasUnlinkedMessagingApp,
   identityLinkOrderingNote,
-  messagingAppsToLink,
   shouldOfferIdentityLinkOnConnect,
   unrecognisedMessagingApps,
   unrecognisedMessagingAppsMessage,
@@ -28,7 +32,7 @@ function bridge(id: string, displayName: string): RemoteBridge {
   };
 }
 
-function identity(bridgeId: string): LinkedIdentity {
+function identity(bridgeId: string, verified = true): LinkedIdentity {
   return {
     id: `identity-${bridgeId}`,
     bridgeId,
@@ -36,6 +40,20 @@ function identity(bridgeId: string): LinkedIdentity {
     bridgeType: 'slack',
     externalUserId: 'U1',
     externalUsername: 'me',
+    verified,
+  };
+}
+
+function pendingLink(bridgeId: string): PendingIdentity {
+  return {
+    id: `pending-${bridgeId}`,
+    bridgeId,
+    bridgeDisplayName: bridgeId,
+    bridgeType: 'slack',
+    externalUserId: 'U1',
+    externalUsername: 'me',
+    requestedByName: null,
+    codeExpiresAt: null,
   };
 }
 
@@ -128,6 +146,10 @@ describe('hasUnlinkedMessagingApp', () => {
   it('is true when one app is unlinked', () => {
     expect(hasUnlinkedMessagingApp([slack, mattermost], [identity('b-slack')])).toBe(true);
   });
+
+  it('counts a link made before links had to be confirmed, which still works', () => {
+    expect(hasUnlinkedMessagingApp([slack], [identity('b-slack', false)])).toBe(false);
+  });
 });
 
 describe('unrecognisedMessagingAppsMessage', () => {
@@ -196,23 +218,57 @@ describe('what is said instead, where the link step is withheld', () => {
   });
 });
 
-describe('messagingAppsToLink', () => {
+describe('accountLinkPrompts', () => {
   const slack = bridge('b-slack', 'Slack');
   const discord = bridge('b-discord', 'Discord');
 
-  it('names every active app with no linked account', () => {
-    expect(messagingAppsToLink([slack, discord], [identity('b-discord')])).toEqual([slack]);
+  it('asks to link every active app with nothing linked or waiting', () => {
+    expect(accountLinkPrompts([slack, discord], [identity('b-discord')], [])).toEqual([
+      { kind: 'link', bridge: slack },
+    ]);
   });
 
-  it('names nothing once every app is linked', () => {
-    expect(messagingAppsToLink([slack], [identity('b-slack')])).toEqual([]);
+  it('asks nothing once every app is linked and confirmed', () => {
+    expect(accountLinkPrompts([slack], [identity('b-slack')], [])).toEqual([]);
   });
 
-  it('names nothing while the linked accounts are unknown', () => {
-    expect(messagingAppsToLink([slack], null)).toEqual([]);
+  it('asks nothing while the linked accounts are unknown', () => {
+    expect(accountLinkPrompts([slack], null, [])).toEqual([]);
   });
 
   it('leaves out a connection that is down', () => {
-    expect(messagingAppsToLink([{ ...slack, status: 'error' }], [])).toEqual([]);
+    expect(accountLinkPrompts([{ ...slack, status: 'error' }], [], [])).toEqual([]);
+  });
+
+  it('says a link is waiting for its code rather than asking for it again', () => {
+    const waiting = pendingLink('b-slack');
+
+    expect(accountLinkPrompts([slack], [], [waiting])).toEqual([
+      { kind: 'pending', bridge: slack, link: waiting },
+    ]);
+  });
+
+  it('waits for the pending links before choosing between link and finish', () => {
+    // Guessing "link" and then flipping to "finish linking" is a prompt that
+    // changes its mind under the cursor.
+    expect(accountLinkPrompts([slack], [], null)).toEqual([]);
+  });
+
+  it('asks to confirm a link made before links had to be confirmed', () => {
+    const old = identity('b-slack', false);
+
+    expect(accountLinkPrompts([slack], [old], null)).toEqual([
+      { kind: 'unverified', bridge: slack, identity: old },
+    ]);
+  });
+
+  it('asks nothing of an app with one confirmed link, whatever else is there', () => {
+    expect(
+      accountLinkPrompts(
+        [slack],
+        [identity('b-slack', false), { ...identity('b-slack'), id: 'other' }],
+        [pendingLink('b-slack')]
+      )
+    ).toEqual([]);
   });
 });

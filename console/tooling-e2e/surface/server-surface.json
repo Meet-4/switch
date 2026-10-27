@@ -332,6 +332,11 @@
       "flags": []
     },
     {
+      "route": "GET /gateway/auth/me/identities/pending",
+      "auth": "session",
+      "flags": []
+    },
+    {
       "route": "GET /gateway/auth/oidc/callback",
       "auth": "none",
       "flags": []
@@ -988,6 +993,16 @@
     },
     {
       "route": "POST /gateway/collaborations/{bridge_id}/identities",
+      "auth": "session",
+      "flags": []
+    },
+    {
+      "route": "POST /gateway/collaborations/{bridge_id}/identities/{external_user_row_id}/code",
+      "auth": "session",
+      "flags": []
+    },
+    {
+      "route": "POST /gateway/collaborations/{bridge_id}/identities/{external_user_row_id}/verify-session",
       "auth": "session",
       "flags": []
     },

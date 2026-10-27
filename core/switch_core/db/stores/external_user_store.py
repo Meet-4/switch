@@ -1,11 +1,24 @@
 from collections.abc import Collection
+from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from switch_core.db.models import Client, ClientRoom, ExternalUser, ExternalUserClaim
+from switch_core.account_links import (
+    LINK_CODE_TTL,
+    hash_link_code,
+    new_link_code,
+    normalise_link_code,
+)
+from switch_core.db.models import (
+    Client,
+    ClientRoom,
+    ExternalUser,
+    ExternalUserClaim,
+    ExternalUserLinkRequest,
+)
 
 
 class ExternalUserStore:
@@ -135,56 +148,210 @@ class ExternalUserStore:
         )
         return list(result.scalars().all())
 
-    async def claimant_ids_for(
+    async def claims_of_user(
+        self, session: AsyncSession, switch_user_id: str
+    ) -> list[tuple[ExternalUser, ExternalUserClaim]]:
+        """`get_by_user` with each claim, for callers that show whether it was
+        verified."""
+        result = await session.execute(
+            select(ExternalUser, ExternalUserClaim)
+            .join(
+                ExternalUserClaim,
+                ExternalUserClaim.external_user_id == ExternalUser.id,
+            )
+            .where(ExternalUserClaim.user_id == switch_user_id)
+        )
+        return [(external, claim) for external, claim in result.tuples()]
+
+    async def claims_for(
         self, session: AsyncSession, external_user_ids: list[str]
-    ) -> dict[str, list[str]]:
-        """`claimant_ids` for several identities at once, to avoid a query per
-        row when listing a bridge's users."""
+    ) -> dict[str, list[ExternalUserClaim]]:
+        """The claims on several identities at once, to avoid a query per row
+        when listing a bridge's users."""
         if not external_user_ids:
             return {}
         result = await session.execute(
-            select(ExternalUserClaim.external_user_id, ExternalUserClaim.user_id).where(
+            select(ExternalUserClaim).where(
                 ExternalUserClaim.external_user_id.in_(external_user_ids)
             )
         )
-        claims: dict[str, list[str]] = {}
-        for external_user_id, user_id in result.all():
-            claims.setdefault(external_user_id, []).append(user_id)
+        claims: dict[str, list[ExternalUserClaim]] = {}
+        for claim in result.scalars():
+            claims.setdefault(claim.external_user_id, []).append(claim)
         return claims
 
-    async def claim(
-        self, session: AsyncSession, external_user: ExternalUser, switch_user_id: str
-    ) -> None:
-        """Record that a Switch user considers this platform account theirs.
-
-        Idempotent, and never a conflict: claiming an account someone else has
-        also claimed is allowed by design. Left to the database rather than a
-        read-then-write, so a double-clicked button races to the same row
-        instead of to a primary-key violation.
-        """
-        await session.execute(
-            pg_insert(ExternalUserClaim)
-            .values(external_user_id=external_user.id, user_id=switch_user_id)
-            .on_conflict_do_nothing(index_elements=["external_user_id", "user_id"])
-        )
-        await session.flush()
+    async def get_claim(
+        self, session: AsyncSession, external_user_id: str, switch_user_id: str
+    ) -> ExternalUserClaim | None:
+        return await session.get(ExternalUserClaim, (external_user_id, switch_user_id))
 
     async def release(
         self, session: AsyncSession, external_user: ExternalUser, switch_user_id: str
     ) -> bool:
-        """Drop one Switch user's claim, leaving anyone else's in place.
+        """Drop one Switch user's claim on this account, and any request to
+        link them to it, leaving anyone else's in place.
 
-        Returns whether there was a claim to drop, so a caller can tell a real
+        Returns whether there was either to drop, so a caller can tell a real
         unlink from a no-op rather than reporting success either way.
         """
-        result = await session.execute(
+        claims = await session.execute(
             delete(ExternalUserClaim).where(
                 ExternalUserClaim.external_user_id == external_user.id,
                 ExternalUserClaim.user_id == switch_user_id,
             )
         )
+        requests = await session.execute(
+            delete(ExternalUserLinkRequest).where(
+                ExternalUserLinkRequest.external_user_id == external_user.id,
+                ExternalUserLinkRequest.user_id == switch_user_id,
+            )
+        )
         await session.flush()
-        return cast("CursorResult[Any]", result).rowcount > 0
+        return any(
+            cast("CursorResult[Any]", result).rowcount > 0
+            for result in (claims, requests)
+        )
+
+    # ── Link requests (CHOO-3881) ────────────────────────────────────────────
+
+    async def request_link(
+        self,
+        session: AsyncSession,
+        external_user: ExternalUser,
+        switch_user_id: str,
+        requested_by_user_id: str,
+    ) -> ExternalUserLinkRequest:
+        """Start linking this account to a Switch user, pending the account's
+        confirmation.
+
+        Asking again keeps the request that is already waiting, code and all,
+        and only records who asked most recently.
+        """
+        await session.execute(
+            pg_insert(ExternalUserLinkRequest)
+            .values(
+                external_user_id=external_user.id,
+                user_id=switch_user_id,
+                requested_by_user_id=requested_by_user_id,
+            )
+            .on_conflict_do_update(
+                index_elements=["external_user_id", "user_id"],
+                set_={"requested_by_user_id": requested_by_user_id},
+            )
+        )
+        await session.flush()
+        request = await session.get(
+            ExternalUserLinkRequest,
+            (external_user.id, switch_user_id),
+            populate_existing=True,
+        )
+        if request is None:
+            raise RuntimeError("A link request was written but could not be read back")
+        return request
+
+    async def get_link_request(
+        self, session: AsyncSession, external_user_id: str, switch_user_id: str
+    ) -> ExternalUserLinkRequest | None:
+        return await session.get(
+            ExternalUserLinkRequest, (external_user_id, switch_user_id)
+        )
+
+    async def link_requests_of_user(
+        self, session: AsyncSession, switch_user_id: str
+    ) -> list[tuple[ExternalUser, ExternalUserLinkRequest]]:
+        """Every account waiting to confirm a new link to this Switch user.
+
+        Leaves out a request to confirm a claim that already exists, made
+        before links needed confirming: that link counts already, and is
+        listed with the claims.
+        """
+        claimed = (
+            select(ExternalUserClaim.external_user_id)
+            .where(
+                ExternalUserClaim.external_user_id
+                == ExternalUserLinkRequest.external_user_id,
+                ExternalUserClaim.user_id == ExternalUserLinkRequest.user_id,
+            )
+            .exists()
+        )
+        result = await session.execute(
+            select(ExternalUser, ExternalUserLinkRequest)
+            .join(
+                ExternalUserLinkRequest,
+                ExternalUserLinkRequest.external_user_id == ExternalUser.id,
+            )
+            .where(ExternalUserLinkRequest.user_id == switch_user_id, ~claimed)
+        )
+        return [(external, request) for external, request in result.tuples()]
+
+    async def issue_link_code(
+        self, session: AsyncSession, request: ExternalUserLinkRequest
+    ) -> tuple[str, datetime]:
+        """A fresh code for this request, replacing any code issued before.
+
+        Returns the code, which is never stored, and when it stops working.
+        """
+        code = new_link_code()
+        normalised = normalise_link_code(code)
+        if normalised is None:
+            raise RuntimeError(f"Generated a link code that does not parse: {code!r}")
+        request.code_hash = hash_link_code(normalised)
+        request.code_expires_at = datetime.now(UTC) + LINK_CODE_TTL
+        await session.flush()
+        return code, request.code_expires_at
+
+    async def redeem_link_code(
+        self, session: AsyncSession, external_user: ExternalUser, code: str
+    ) -> ExternalUserLinkRequest | None:
+        """Confirm the link this code was issued for, if it was issued for
+        this account and has not expired.
+
+        The request becomes a verified claim, upgrading an unverified one in
+        place. None when nothing matches, which the caller reports without
+        saying which part was wrong.
+        """
+        normalised = normalise_link_code(code)
+        if normalised is None:
+            return None
+        request = await session.scalar(
+            select(ExternalUserLinkRequest)
+            .where(
+                ExternalUserLinkRequest.external_user_id == external_user.id,
+                ExternalUserLinkRequest.code_hash == hash_link_code(normalised),
+                ExternalUserLinkRequest.code_expires_at > func.now(),
+            )
+            .with_for_update()
+        )
+        if request is None:
+            return None
+        await self.confirm_link_request(session, request)
+        return request
+
+    async def confirm_link_request(
+        self, session: AsyncSession, request: ExternalUserLinkRequest
+    ) -> None:
+        """Turn a request the account has proved into a verified claim.
+
+        Idempotent on the claim, and never a conflict: claiming an account
+        someone else has also claimed is allowed by design, and an unverified
+        claim of the same pair is upgraded in place. Left to the database
+        rather than a read-then-write, so two confirmations race to the same
+        row instead of to a primary-key violation.
+        """
+        await session.execute(
+            pg_insert(ExternalUserClaim)
+            .values(
+                external_user_id=request.external_user_id,
+                user_id=request.user_id,
+                verified_at=func.now(),
+            )
+            .on_conflict_do_update(
+                index_elements=["external_user_id", "user_id"],
+                set_={"verified_at": func.now()},
+            )
+        )
+        await session.delete(request)
+        await session.flush()
 
     async def delete(self, session: AsyncSession, user_id: str) -> None:
         user = await session.get(ExternalUser, user_id)

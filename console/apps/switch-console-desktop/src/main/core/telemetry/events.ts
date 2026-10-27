@@ -191,6 +191,15 @@ export type TelemetryUpdateTrigger = 'user' | 'startup' | 'scheduled';
 
 export type TelemetryBridgeFailure = 'none' | 'unauthenticated' | 'forbidden' | 'invalid' | 'error';
 
+/**
+ * How linking a messaging account came out. `pending` is a link the server is
+ * holding until a one-time code is posted from the account, which counts for
+ * nothing yet — reported apart from `success` so the links that are never
+ * confirmed stay visible. A server that predates confirming links answers
+ * `success` straight away.
+ */
+export type TelemetryIdentityClaimOutcome = 'success' | 'pending' | 'failure';
+
 export type TelemetryRoomCreateFailure =
   | 'none'
   | 'unauthenticated'
@@ -392,7 +401,7 @@ export type TelemetryEventMap = {
   /** Someone linked their account on a messaging platform to their Switch user. */
   bridge_identity_claimed: {
     bridge_platform: TelemetryBridgePlatform;
-    outcome: TelemetryOutcome;
+    outcome: TelemetryIdentityClaimOutcome;
   };
   /**
    * An agent was removed. `delete_in_switch` says whether its identity on the

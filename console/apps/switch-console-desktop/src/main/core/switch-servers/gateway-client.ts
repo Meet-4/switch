@@ -76,9 +76,11 @@ import {
   type ChatClaim,
   type ConnectedChat,
   type DeleteBridgeResult,
+  type LinkCode,
   type LinkedIdentity,
   type MessagingAppInstall,
   type MessagingApps,
+  type PendingIdentity,
   type RemoteAgentRoom,
   type RemoteAgentSummary,
   type RemoteBridge,
@@ -2093,20 +2095,36 @@ export async function deleteMessagingAppInstall(
   });
 }
 
-/** The gateway `IdentityClaimant` wire shape. */
+/** The gateway `IdentityClaimant` wire shape. `verified` is absent from a
+ * server that predates confirming links, where every link counts the same. */
 type IdentityClaimantJson = {
   user_id: string;
   user_name: string;
+  verified?: boolean;
 };
 
-/** The gateway `ExternalUserSummary` wire shape. */
+/** The gateway `LinkCode` wire shape. */
+type LinkCodeJson = {
+  code: string;
+  expires_at: string;
+  instructions: string;
+};
+
+/** The gateway `ExternalUserSummary` wire shape. `link_request` is set when a
+ * claim is waiting for the account to confirm it, and absent from a server that
+ * predates confirming, which links straight away. */
 type ExternalUserSummaryJson = {
   id: string;
   bridge_id: string;
   external_user_id: string;
   external_username: string;
   claimed_by?: IdentityClaimantJson[];
+  link_request?: { user_id: string; code: LinkCodeJson | null } | null;
 };
+
+export function mapLinkCode(json: LinkCodeJson): LinkCode {
+  return { code: json.code, expiresAt: json.expires_at, instructions: json.instructions };
+}
 
 /**
  * Union of external (bridged human) users across every bridge on the server
@@ -2170,7 +2188,11 @@ export async function searchBridgeDirectory(
       displayName: u.display_name,
       email: u.email ?? null,
       knownExternalUserId: u.known_external_user_id ?? null,
-      claimedBy: (u.claimed_by ?? []).map((c) => ({ userId: c.user_id, userName: c.user_name })),
+      claimedBy: (u.claimed_by ?? []).map((c) => ({
+        userId: c.user_id,
+        userName: c.user_name,
+        verified: c.verified ?? true,
+      })),
     })),
   };
 }
@@ -2184,6 +2206,9 @@ export async function searchBridgeDirectory(
  * claimed is claimed normally; a 409 means only that the bridge is stopped and
  * an unseen account cannot be provisioned, and surfaces as a `GatewayError`
  * with that status.
+ *
+ * A current server answers with the link still pending and a code to post from
+ * the account (`link_request`); see {@link issueIdentityLinkCode}.
  */
 export async function claimBridgeIdentity(
   server: SwitchServer,
@@ -2203,8 +2228,29 @@ export async function claimBridgeIdentity(
 }
 
 /**
- * Drop one claim on a platform account
- * (`DELETE /collaborations/{id}/identities/{rowId}`). `externalUserRowId` is
+ * A fresh code confirming the signed-in user's link to a platform account
+ * (`POST /collaborations/{id}/identities/{rowId}/code`), for a link still
+ * pending or one made before links had to be confirmed. It replaces any code
+ * issued before; the server keeps none, so this is also how a lost code is
+ * "shown again". 409 means the link is already confirmed (or the account cannot
+ * be linked at all), 404 that there is nothing to confirm.
+ */
+export async function issueIdentityLinkCode(
+  server: SwitchServer,
+  bridgeId: string,
+  externalUserRowId: string
+): Promise<LinkCode> {
+  const res = await gatewayFetch(
+    server,
+    `/collaborations/${encodeURIComponent(bridgeId)}/identities/${encodeURIComponent(externalUserRowId)}/code`,
+    { authenticated: true, method: 'POST' }
+  );
+  return mapLinkCode((await res.json()) as LinkCodeJson);
+}
+
+/**
+ * Drop one claim on a platform account, or cancel a link still waiting for its
+ * code (`DELETE /collaborations/{id}/identities/{rowId}`). `externalUserRowId` is
  * the `ExternalUser` row id, not the platform's id.
  *
  * Several users can hold a claim on the same account, so `userId` says whose
@@ -2228,10 +2274,11 @@ export async function releaseBridgeIdentity(
 }
 
 /**
- * The messaging accounts the signed-in user has claimed
+ * The messaging accounts linked to the signed-in user
  * (`GET /auth/me/identities`). An agent whose policy names its owner is
  * unreachable by that owner on any bridge missing from this list, so this is
  * what the addressing UI checks before letting a policy seal an agent off.
+ * Only links that count are listed: one still waiting for its code is not.
  */
 export async function fetchMyIdentities(server: SwitchServer): Promise<LinkedIdentity[]> {
   const res = await gatewayFetch(server, '/auth/me/identities', { authenticated: true });
@@ -2242,6 +2289,7 @@ export async function fetchMyIdentities(server: SwitchServer): Promise<LinkedIde
     bridge_type: string;
     external_user_id: string;
     external_username: string;
+    verified?: boolean;
   }>;
   return json.map((i) => ({
     id: i.id,
@@ -2250,6 +2298,42 @@ export async function fetchMyIdentities(server: SwitchServer): Promise<LinkedIde
     bridgeType: i.bridge_type,
     externalUserId: i.external_user_id,
     externalUsername: i.external_username,
+    verified: i.verified ?? true,
+  }));
+}
+
+/**
+ * The messaging accounts waiting to confirm a link to the signed-in user
+ * (`GET /auth/me/identities/pending`). A server that predates confirming links
+ * has no such route and no such links, so its 404 reads as none.
+ */
+export async function fetchMyPendingIdentities(server: SwitchServer): Promise<PendingIdentity[]> {
+  let res: Response;
+  try {
+    res = await gatewayFetch(server, '/auth/me/identities/pending', { authenticated: true });
+  } catch (cause) {
+    if (cause instanceof GatewayError && cause.status === 404) return [];
+    throw cause;
+  }
+  const json = (await res.json()) as Array<{
+    id: string;
+    bridge_id: string;
+    bridge_display_name: string;
+    bridge_type: string;
+    external_user_id: string;
+    external_username: string;
+    requested_by_name: string | null;
+    code_expires_at: string | null;
+  }>;
+  return json.map((i) => ({
+    id: i.id,
+    bridgeId: i.bridge_id,
+    bridgeDisplayName: i.bridge_display_name,
+    bridgeType: i.bridge_type,
+    externalUserId: i.external_user_id,
+    externalUsername: i.external_username,
+    requestedByName: i.requested_by_name,
+    codeExpiresAt: i.code_expires_at,
   }));
 }
 

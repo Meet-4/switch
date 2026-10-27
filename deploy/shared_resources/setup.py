@@ -365,6 +365,12 @@ def link_owner_identity(
     deployment's own chat, and the Home page reports an account the user has to
     link by hand (CHOO-2172).
 
+    A link only counts once the account confirms it (CHOO-3881). A person does
+    that by posting a code, which needs a channel with an agent in it to hear
+    it, and a fresh deployment has none; so setup confirms it with the
+    account's own Mattermost session instead, which it can open because it
+    created the account.
+
     Only ever claims when the admin holds no identity on this bridge, so a
     re-run is a no-op. Someone who deliberately unlinks themselves and runs
     setup again does get relinked; that is the cost of repairing every existing
@@ -397,13 +403,65 @@ def link_owner_identity(
         json={"external_user_id": external_user_id, "username": MATTERMOST_USER},
     )
     if resp.is_success:
-        print(f"Linked {GATEWAY_ADMIN_EMAIL} to Mattermost account {MATTERMOST_USER}")
+        identity = resp.json()
+        if identity.get("link_request") is None:
+            print(
+                f"Linked {GATEWAY_ADMIN_EMAIL} to Mattermost account {MATTERMOST_USER}"
+            )
+        else:
+            confirm_owner_identity(client, bridge_id, identity["id"])
         return
     print(
         f"WARNING: Could not link {GATEWAY_ADMIN_EMAIL} to the Mattermost account "
         f"{MATTERMOST_USER}: {resp.status_code} {resp.text}. Owner-only agents will "
         "not recognise you in Mattermost until you link the account yourself from "
         "the server's Messaging apps section."
+    )
+
+
+def confirm_owner_identity(
+    client: httpx.Client, bridge_id: str, identity_id: str
+) -> None:
+    """Confirm the admin's waiting link with the seeded account's own session.
+
+    The session is opened for this and closed straight after, so setup leaves
+    no login of the account behind.
+    """
+    mattermost = httpx.Client(base_url=MATTERMOST_URL, timeout=10)
+    try:
+        login = mattermost.post(
+            "/api/v4/users/login",
+            json={"login_id": MATTERMOST_USER, "password": MATTERMOST_USER_PASSWORD},
+        )
+        if not login.is_success:
+            print(
+                f"WARNING: Could not sign in to Mattermost as {MATTERMOST_USER} "
+                f"({login.status_code} {login.text}), so the link to "
+                f"{GATEWAY_ADMIN_EMAIL} is waiting to be confirmed. Confirm it "
+                "from the server's Messaging apps section."
+            )
+            return
+        token = login.headers["token"]
+        try:
+            resp = client.post(
+                f"/gateway/collaborations/{bridge_id}/identities/{identity_id}"
+                "/verify-session",
+                json={"token": token},
+            )
+        finally:
+            mattermost.post(
+                "/api/v4/users/logout", headers={"Authorization": f"Bearer {token}"}
+            )
+    finally:
+        mattermost.close()
+    if resp.is_success:
+        print(f"Linked {GATEWAY_ADMIN_EMAIL} to Mattermost account {MATTERMOST_USER}")
+        return
+    print(
+        f"WARNING: Could not confirm the link from {GATEWAY_ADMIN_EMAIL} to the "
+        f"Mattermost account {MATTERMOST_USER}: {resp.status_code} {resp.text}. "
+        "Owner-only agents will not recognise you in Mattermost until you confirm "
+        "it from the server's Messaging apps section."
     )
 
 

@@ -9,7 +9,7 @@ import threading
 import uuid
 import weakref
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -2939,6 +2939,32 @@ class MattermostAdapter(PlatformAdapter):
             )
         )
         self._dispatch(coro, loop)  # type: ignore[arg-type]
+
+    @classmethod
+    def link_code_instructions(
+        cls, code: str, connection_config: Mapping[str, object]
+    ) -> str:
+        # Switch hears Mattermost through its agents' bots, so a channel with no
+        # agent in it is one where nothing reaches Switch.
+        return (
+            f"Post `!link-account {code}` from that account in a Mattermost "
+            "channel that has a Switch agent in it."
+        )
+
+    async def account_id_for_session(self, token: str) -> str:
+        driver = self._create_driver(token=token)
+        try:
+            me = await asyncio.to_thread(driver.login)
+        except NoAccessTokenProvided as e:
+            raise PermissionError("Mattermost did not accept that session token") from e
+        except sync_requests.RequestException as e:
+            raise RuntimeError(
+                f"Could not ask Mattermost whose session token that is: {e}"
+            ) from e
+        user_id = me.get("id") if isinstance(me, dict) else None
+        if not user_id:
+            raise RuntimeError("Mattermost did not say whose session token that is")
+        return str(user_id)
 
     async def search_directory_users(self, query: str) -> list[DirectoryUser]:
         """Find team members via Mattermost's own user search.

@@ -281,10 +281,22 @@ workspace. Offer to draft the message.
     app instead" and paste the values.
   - Never ask them to paste a token into this chat.
 
-**Their chat account** — when an app is connected but `your_account_linked` is
-false, agents that answer only their owner won't recognise them there. Link
-[the server's home](switchdash://open/home), where Messaging apps lets them link
-their account.
+**Their chat account** — read `your_account_link` for the app:
+- `none`: agents that answer only their owner won't recognise them there. Link
+  [the server's home](switchdash://open/home), where Messaging apps lets them
+  link their account.
+- `pending`: they started linking but the account hasn't confirmed it, so it
+  doesn't count yet. Switch Console showed them a code to post from that chat
+  account (for example `!link-account 7KQ2-M9XD`); tell them to post it, or to
+  get a new code from [the server's home](switchdash://open/home) if it has
+  expired.
+- `unverified`: it works, but was linked before links needed confirming. Suggest
+  confirming it from [the server's home](switchdash://open/home), which gives
+  them a code to post from that account.
+- `verified`: nothing to do.
+
+Never ask for the code or post it yourself: it only works when the chat account
+it was issued for posts it.
 
 ### Adding people to a room
 
@@ -295,8 +307,9 @@ person is left out.
 
 - **The person you are talking to:** their usernames on each app are `your_usernames` in
   `get_my_context` (`messaging_apps.connected`, matched to the room's `bridge_id` by `id`).
-  When the list is empty their account is not linked there yet: ask for their username on
-  that app, and link [the server's home](switchdash://open/home) so they can link it.
+  When the list is empty their account is not linked there yet (or not confirmed: see
+  `your_account_link`): ask for their username on that app, and link
+  [the server's home](switchdash://open/home) so they can link it.
 - **Anyone else:** ask for their username on that app, or the e-mail address they use
   there. Never guess one from a first name.
 - **Check the result.** `add_users_to_room` returns `unresolved`, the people it could not
@@ -406,7 +419,8 @@ Things people ask for that you should know:
   (`switchdash://open/agent/<agent-id>?tab=settings`); "Anyone" admits anyone in the
   rooms the agent is in. You can change it for an
   agent with `update_agent_detail` once they say so. Warn them: a person whose chat account
-  is not linked to Switch is not recognised, and the agent will not answer them.
+  is not linked to Switch, and confirmed from that account, is not recognised, and the
+  agent will not answer them.
 - **"Put you (or an agent) in a channel."** Two steps, in this order, one message each:
   1. **Add the Switch app to the channel.** A channel does nothing for Switch until the
      Switch app is in it (on Slack: mention the app in the channel and accept the invite,

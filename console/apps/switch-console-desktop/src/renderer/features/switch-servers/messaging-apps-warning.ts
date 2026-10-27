@@ -1,4 +1,8 @@
-import type { LinkedIdentity, RemoteBridge } from '@shared/core/switch-servers/switch-servers';
+import type {
+  LinkedIdentity,
+  PendingIdentity,
+  RemoteBridge,
+} from '@shared/core/switch-servers/switch-servers';
 
 /**
  * When the "Messaging apps" card should warn that owner-only agents cannot
@@ -48,22 +52,44 @@ export function hasUnlinkedMessagingApp(
 }
 
 /**
- * The apps the server home keeps prompting "Link your <app> account" for: every
- * active one the signed-in user has claimed no account in. Unlike the warning
- * above it does not wait for an owner-addressed agent — it is the reminder for
- * a link step skipped after adding the app, and it stays until the account is
- * linked. Empty while the identity list is unknown, for the same reason as
- * there. A connection that is down is left out: nobody reaches an agent
- * through it until it is back.
+ * What the server home asks of the signed-in user about each active app's
+ * account, one prompt per app that needs one:
+ *
+ * - `link` — nothing is linked there. The reminder for a link step skipped
+ *   after adding the app; it stays until the account is linked.
+ * - `pending` — a link is waiting for its code to be posted from the account,
+ *   and counts for nothing until it is (CHOO-3881).
+ * - `unverified` — the link predates confirming links. It counts, and the
+ *   prompt asks for it to be confirmed.
+ *
+ * Unlike the warning above it does not wait for an owner-addressed agent.
+ * Nothing is prompted while the linked accounts are unknown, for the same
+ * reason as there, and an app with nothing linked waits for the pending list
+ * too, since it decides which of two prompts to show. A connection that is down
+ * is left out: nobody reaches an agent through it until it is back.
  */
-export function messagingAppsToLink(
+export type AccountLinkPrompt =
+  | { kind: 'link'; bridge: RemoteBridge }
+  | { kind: 'pending'; bridge: RemoteBridge; link: PendingIdentity }
+  | { kind: 'unverified'; bridge: RemoteBridge; identity: LinkedIdentity };
+
+export function accountLinkPrompts(
   bridges: RemoteBridge[],
-  identities: LinkedIdentity[] | null
-): RemoteBridge[] {
+  identities: LinkedIdentity[] | null,
+  pending: PendingIdentity[] | null
+): AccountLinkPrompt[] {
   if (identities === null) return [];
-  return bridges.filter(
-    (bridge) => bridge.status === 'active' && !identities.some((i) => i.bridgeId === bridge.id)
-  );
+  return bridges
+    .filter((bridge) => bridge.status === 'active')
+    .flatMap((bridge): AccountLinkPrompt[] => {
+      const linked = identities.filter((i) => i.bridgeId === bridge.id);
+      if (linked.some((i) => i.verified)) return [];
+      const unverified = linked[0];
+      if (unverified !== undefined) return [{ kind: 'unverified', bridge, identity: unverified }];
+      if (pending === null) return [];
+      const waiting = pending.find((p) => p.bridgeId === bridge.id);
+      return [waiting ? { kind: 'pending', bridge, link: waiting } : { kind: 'link', bridge }];
+    });
 }
 
 /** The warning, as one sentence naming the apps. Callers pass a non-empty list

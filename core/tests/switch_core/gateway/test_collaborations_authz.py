@@ -82,12 +82,14 @@ WRITE_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 # scope to: the row it mutates is a link between a platform account and one
 # Switch user, not part of the bridge itself, and a user must be able to claim
 # their own without an admin. These routes carry a self-or-admin check inside
-# the handler instead — asserted by
-# `test_owner_scoped_identity_routes_check_self_or_admin` below, so the
-# exemption cannot hide an unauthorized route.
+# the handler instead — asserted by `TestIdentityRoutesAreSelfOrAdmin` below,
+# so the exemption cannot hide an unauthorized route. Confirming a link
+# (CHOO-3881) takes no user at all: it only ever acts for the caller.
 _OWNER_SCOPED_PATHS = {
     "/{bridge_id}/identities",
     "/{bridge_id}/identities/{external_user_row_id}",
+    "/{bridge_id}/identities/{external_user_row_id}/code",
+    "/{bridge_id}/identities/{external_user_row_id}/verify-session",
 }
 
 

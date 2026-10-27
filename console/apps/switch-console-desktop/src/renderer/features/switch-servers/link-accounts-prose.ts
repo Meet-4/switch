@@ -19,3 +19,9 @@ export function connectedAppsSummary(serverName: string, count: number): string 
   if (count === 0) return `${serverName} has no messaging apps connected yet.`;
   return `${serverName} has ${spellCount(count)} messaging app${count === 1 ? '' : 's'} connected.`;
 }
+
+/** A platform username as a handle. Platforms differ on whether the username
+ * they report already carries the sigil, so add one only when it is missing. */
+export function accountHandle(username: string): string {
+  return username.startsWith('@') ? username : `@${username}`;
+}

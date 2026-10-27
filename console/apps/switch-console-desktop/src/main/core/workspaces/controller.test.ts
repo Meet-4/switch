@@ -18,6 +18,7 @@ const runTemplateWithAgents = vi.hoisted(() => vi.fn());
 const runTemplateDocument = vi.hoisted(() => vi.fn());
 const fetchRoomDetail = vi.hoisted(() => vi.fn());
 const fetchManagedAgent = vi.hoisted(() => vi.fn());
+const claimIdentityOnServer = vi.hoisted(() => vi.fn());
 const managedAgentLocator = vi.hoisted(() =>
   vi.fn(async () => (controllerId: string) => (controllerId === 'c1' ? 'local' : 'remote'))
 );
@@ -90,7 +91,8 @@ vi.mock('@main/core/switch-servers/disconnect-bridge', () => ({
   bridgeInstallState,
 }));
 vi.mock('@main/core/switch-servers/identities', () => ({
-  claimIdentityOnServer: vi.fn(),
+  claimIdentityOnServer,
+  issueLinkCodeOnServer: vi.fn(),
   searchDirectoryOnServer: vi.fn(),
 }));
 vi.mock('@main/core/switch-servers/teams-package', () => ({ saveTeamsPackage }));
@@ -116,6 +118,7 @@ vi.mock('@main/core/switch-servers/gateway-client', () => ({
   fetchConnectionAgents,
   fetchWorkspaceServices,
   fetchMyIdentities: vi.fn(),
+  fetchMyPendingIdentities: vi.fn(),
   fetchRoomAgentIds: vi.fn(),
   fetchManagedAgent,
   fetchRoomDetail,
@@ -202,6 +205,59 @@ describe('disconnecting a bridge', () => {
 
     await vi.waitFor(() =>
       expect(trackEvent).toHaveBeenCalledWith('bridge_disconnected', {
+        bridge_platform: 'slack',
+        outcome: 'failure',
+      })
+    );
+  });
+});
+
+describe('linking a messaging account', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    managedServerHostBlocked.mockReturnValue(null);
+    getServer.mockResolvedValue(server({}));
+    requireWorkspace.mockResolvedValue(workspace());
+    fetchBridges.mockResolvedValue([{ id: 'b1', type: 'slack' }]);
+  });
+
+  const PARAMS = { workspaceId: 'ws', bridgeId: 'b1', externalUserId: 'U1', username: 'ada' };
+
+  it('reports a link waiting for its code apart from one that took effect', async () => {
+    // A pending link counts for nothing until the code is posted; filing it
+    // under success would hide every link that is never confirmed.
+    claimIdentityOnServer.mockResolvedValue({ kind: 'pending', pending: {}, code: null });
+
+    await workspacesController.claimBridgeIdentity(PARAMS);
+
+    await vi.waitFor(() =>
+      expect(trackEvent).toHaveBeenCalledWith('bridge_identity_claimed', {
+        bridge_platform: 'slack',
+        outcome: 'pending',
+      })
+    );
+  });
+
+  it('reports a link that took effect at once as a success', async () => {
+    claimIdentityOnServer.mockResolvedValue({ kind: 'claimed', identity: {} });
+
+    await workspacesController.claimBridgeIdentity(PARAMS);
+
+    await vi.waitFor(() =>
+      expect(trackEvent).toHaveBeenCalledWith('bridge_identity_claimed', {
+        bridge_platform: 'slack',
+        outcome: 'success',
+      })
+    );
+  });
+
+  it('reports a refused claim as a failure', async () => {
+    claimIdentityOnServer.mockResolvedValue({ kind: 'bridge-unavailable', message: 'stopped' });
+
+    await workspacesController.claimBridgeIdentity(PARAMS);
+
+    await vi.waitFor(() =>
+      expect(trackEvent).toHaveBeenCalledWith('bridge_identity_claimed', {
         bridge_platform: 'slack',
         outcome: 'failure',
       })

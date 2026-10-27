@@ -6,7 +6,7 @@ import math
 import re
 import uuid
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, ClassVar, Literal, NoReturn
@@ -1758,6 +1758,15 @@ class SlackAdapter(PlatformAdapter):
         # Slack passes a slash command's whole tail through as free text, so the
         # invocation reads exactly like the `!` form.
         return "`/invite-agent @agent-name` — the Slack slash command"
+
+    @classmethod
+    def link_code_instructions(
+        cls, code: str, connection_config: Mapping[str, object]
+    ) -> str:
+        return (
+            f"Run `/link-account {code}` from that account in any channel Switch "
+            f"is in, or post `!link-account {code}` there."
+        )
 
     async def admin_message(
         self,
