@@ -45,10 +45,8 @@ It exits non-zero if any journey fails. Output goes to
    expected one. It collects the server's `Follow the conversation:` log line
    for each message, and writes the report.
 
-An in-Console chat cannot send `!assign-agent` or `!follow-ups`, so those
-journey steps write the room setting the command would, straight through
-`RoomStore`. The commands' own replies and refusals are covered by
-`core/tests/switch_core/bridges/agent/test_commands_follow_ups.py`.
+`!assign-agent`, `!unassign-agent` and `!follow-ups` are typed into the chat
+like any message; the run waits for Switch's reply to each before going on.
 
 The journeys mirror `test_conversation_journeys.py`. When you add a rule or a
 command, add a journey to both.

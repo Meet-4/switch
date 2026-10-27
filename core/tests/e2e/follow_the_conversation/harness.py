@@ -30,11 +30,6 @@ from pathlib import Path
 
 import aiohttp
 
-from switch_core.config import SwitchConfig
-from switch_core.db.engine import create_engine_from_config, create_session_factory
-from switch_core.db.session_scope import tenant_session
-from switch_core.db.stores.room_store import RoomStore
-
 REPO = Path(__file__).resolve().parents[4]
 HERE = Path(
     os.environ.get("E2E_OUT", REPO / "build" / "e2e" / "follow-the-conversation")
@@ -145,27 +140,6 @@ async def open_chats(
         "update_agent_detail",
         {"agent_id": private_bot, "addressing": "owner_only"},
     )
-
-
-async def set_room(state: dict, room_id: str, setting: str, value: object) -> None:
-    """Write the room setting `!assign-agent` / `!follow-ups` would.
-
-    An in-Console chat cannot send those commands, so the setting is written
-    as their handlers write it; the handlers are covered by
-    test_commands_follow_ups.py.
-    """
-    engine = create_engine_from_config(SwitchConfig())  # type: ignore[call-arg]
-    try:
-        factory = create_session_factory(engine)
-        async with tenant_session(factory, state["tenant_id"]) as session:
-            if setting == "main_agent":
-                agent_id = state["agents"][value]["id"] if value else None
-                await RoomStore().set_main_agent(session, room_id, agent_id)
-            else:
-                await RoomStore().set_follow_ups_enabled(session, room_id, bool(value))
-            await session.commit()
-    finally:
-        await engine.dispose()
 
 
 # ── Switch agent protocol ───────────────────────────────────────────────────
@@ -401,8 +375,8 @@ async def agents() -> None:
 # where: "top" for a room message, or "thread:<label>" to reply under the
 # message an earlier step labelled. A step may label its own message with
 # "label=<name>"; "answer:<agent>" labels the agent's reply to that step.
-# ("set", command, setting, value) writes the room setting the command would:
-# an in-Console chat cannot send `!assign-agent` or `!follow-ups`.
+# ("cmd", who, command, reply) types a `!command` and waits for Switch's reply
+# containing that text.
 SCENARIOS = [
     {
         "id": "S1",
@@ -534,7 +508,12 @@ SCENARIOS = [
         "room": "main-agent",
         "title": "Rule 3: after !assign-agent, every message reaches the main agent",
         "steps": [
-            ("set", "!assign-agent @helper", "main_agent", "helper"),
+            (
+                "cmd",
+                "user",
+                "!assign-agent @helper",
+                "From now on, every message here goes to",
+            ),
             ("bob", "anyone know why the deploy failed?", "top", {"helper"}, None),
             ("user", "morning all", "top", {"helper"}, None),
         ],
@@ -550,13 +529,19 @@ SCENARIOS = [
     {
         "id": "S14",
         "room": "main-agent",
-        "title": "!unassign-agent ends it, and another agent can be assigned",
+        "title": "!unassign-agent ends it, and you can't assign an agent that won't take your instructions",
         "steps": [
-            ("set", "!unassign-agent", "main_agent", None),
+            ("cmd", "user", "!unassign-agent", "is no longer assigned"),
             ("bob", "has anyone seen the build logs?", "top", set(), None),
-            ("set", "!assign-agent @reviewer", "main_agent", "reviewer"),
+            (
+                "cmd",
+                "user",
+                "!assign-agent @reviewer",
+                "From now on, every message here goes to",
+            ),
             ("bob", "can someone check the release notes?", "top", {"reviewer"}, None),
-            ("set", "!unassign-agent", "main_agent", None),
+            ("cmd", "user", "!unassign-agent", "is no longer assigned"),
+            ("cmd", "user", "!assign-agent @private-bot", "You can't assign"),
         ],
     },
     {
@@ -571,9 +556,9 @@ SCENARIOS = [
                 {"helper"},
                 "answer:helper=f1",
             ),
-            ("set", "!follow-ups off", "follow_ups", False),
+            ("cmd", "user", "!follow-ups off", "Follow-ups are **off**"),
             ("user", "and how long does it take?", "thread:f1", set(), None),
-            ("set", "!follow-ups on", "follow_ups", True),
+            ("cmd", "user", "!follow-ups on", "Follow-ups are **on**"),
             ("user", "and which tests are slow?", "thread:f1", {"helper"}, None),
         ],
     },
@@ -603,6 +588,17 @@ async def wait_for_agent_reply(http, room_id, agent, after_seq, timeout=20) -> d
     raise RuntimeError(f"no reply from {agent}")
 
 
+async def wait_for_command_reply(http, room_id, expect, after_seq, timeout=20):
+    """The body of Switch's reply to a typed command, or None if none came."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for message in await chat_messages(http, room_id):
+            if message["seq"] > after_seq and expect in message["body"]:
+                return message["body"]
+        await asyncio.sleep(0.5)
+    return None
+
+
 async def run() -> None:
     e = env()
     state = load_state()
@@ -630,10 +626,20 @@ async def run() -> None:
                     await asyncio.sleep(step[1])
                     step_results.append({"wait": step[1]})
                     continue
-                if step[0] == "set":
-                    _, command, setting, value = step
-                    await set_room(state, room_id, setting, value)
-                    step_results.append({"set": command})
+                if step[0] == "cmd":
+                    _, who, command, expect_reply = step
+                    sent = await chat_post(people[who], room_id, command)
+                    reply_text = await wait_for_command_reply(
+                        people[who], room_id, expect_reply, sent["seq"]
+                    )
+                    step_results.append(
+                        {
+                            "cmd": command,
+                            "who": who,
+                            "reply": reply_text,
+                            "ok": reply_text is not None,
+                        }
+                    )
                     continue
                 who, text, where, expected, label = step
                 # Small talk is sent exactly as a person would type it: a tag
@@ -715,8 +721,12 @@ def write_report(results, events, log_text, transcripts, state) -> int:
             if "wait" in st:
                 body.append(f"| {i} | — | *waited {st['wait']} seconds* | | | |")
                 continue
-            if "set" in st:
-                body.append(f"| {i} | — | *room set as by `{st['set']}`* | | | |")
+            if "cmd" in st:
+                sc_ok &= st["ok"]
+                answer = (st["reply"] or "no reply").split(".")[0]
+                body.append(
+                    f"| {i} | {st['who']} | `{st['cmd']}` (command) | Switch confirms | {answer} | {'✅ pass' if st['ok'] else '❌ FAIL'} |"
+                )
                 continue
             mine = [
                 ev
