@@ -211,18 +211,22 @@ class RoomService:
         this service."""
         self._chats = chats
 
+    @property
+    def chats(self) -> ChatService:
+        if self._chats is None:
+            raise RuntimeError(
+                "RoomService has no ChatService (use_chats), so a room with no "
+                "messaging app cannot be reached through Switch Console"
+            )
+        return self._chats
+
     async def _join_people(
         self, tenant_id: str, room_id: str, user_names: list[str], user_ids: list[str]
     ) -> list[str]:
         """`ChatService.join_people`; the names that did not make it."""
         if not user_names and not user_ids:
             return []
-        if self._chats is None:
-            raise RuntimeError(
-                "RoomService has no ChatService (use_chats), so people cannot "
-                "be put in a room with no messaging app"
-            )
-        return await self._chats.join_people(
+        return await self.chats.join_people(
             tenant_id, room_id, user_names=user_names, user_ids=user_ids
         )
 

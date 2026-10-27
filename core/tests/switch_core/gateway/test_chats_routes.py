@@ -16,6 +16,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -863,7 +864,7 @@ async def test_an_invited_member_keeps_a_chat_that_loses_its_last_agent(
     chats: _Harness,
 ) -> None:
     agent = await chats.agent("helper", owner=chats.bob)
-    room_id = await _room(chats, [agent], owner=chats.alice)
+    room_id = await _room(chats, [agent], owner=chats.alice, bridge="slack")
     assert room_id not in await _listed(chats, chats.bob)
     assert (await chats.invite(chats.alice, room_id, chats.bob)).status_code == 200
 
@@ -884,7 +885,7 @@ async def test_unlisted_room_still_delivers_messages_to_invited_member(
     chats: _Harness,
 ) -> None:
     agent = await chats.agent("helper", owner=chats.alice)
-    room_id = await _room(chats, [agent], owner=chats.alice)
+    room_id = await _room(chats, [agent], owner=chats.alice, bridge="slack")
     assert (await chats.invite(chats.alice, room_id, chats.alice)).status_code == 200
     assert (await chats.invite(chats.alice, room_id, chats.bob)).status_code == 200
 
@@ -911,7 +912,7 @@ async def test_unlisted_then_revoked_room_emits_access_removal(
     chats: _Harness,
 ) -> None:
     agent = await chats.agent("helper", owner=chats.alice)
-    room_id = await _room(chats, [agent], owner=chats.alice)
+    room_id = await _room(chats, [agent], owner=chats.alice, bridge="slack")
     assert (await chats.invite(chats.alice, room_id, chats.alice)).status_code == 200
     assert (await chats.invite(chats.alice, room_id, chats.bob)).status_code == 200
 
@@ -944,8 +945,10 @@ async def test_unlisted_then_revoked_room_emits_access_removal(
 async def test_an_unlisted_chat_is_announced_again_when_an_agent_returns(
     chats: _Harness,
 ) -> None:
+    # A bridge that is not running here: nothing to add the agent to.
+    chats.room_service._collab_lifecycle = SimpleNamespace(get=lambda _id: None)  # type: ignore[assignment]
     agent = await chats.agent("helper", owner=chats.alice)
-    room_id = await _room(chats, [agent], owner=chats.alice)
+    room_id = await _room(chats, [agent], owner=chats.alice, bridge="slack")
     assert (await chats.invite(chats.alice, room_id, chats.bob)).status_code == 200
 
     events = _stream(chats, chats.bob, {}, recheck=60.0)
@@ -968,8 +971,10 @@ async def test_an_unlisted_chat_is_announced_again_when_an_agent_returns(
 async def test_the_periodic_recheck_announces_a_chat_that_regains_an_agent(
     chats: _Harness,
 ) -> None:
+    # A bridge that is not running here: nothing to add the agent to.
+    chats.room_service._collab_lifecycle = SimpleNamespace(get=lambda _id: None)  # type: ignore[assignment]
     agent = await chats.agent("helper", owner=chats.alice)
-    room_id = await _room(chats, [agent], owner=chats.alice)
+    room_id = await _room(chats, [agent], owner=chats.alice, bridge="slack")
     assert (await chats.invite(chats.alice, room_id, chats.bob)).status_code == 200
     async with chats.factory() as session:
         await session.execute(

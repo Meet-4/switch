@@ -220,6 +220,28 @@ async def test_the_owner_renames_from_console_and_others_are_refused(
     assert admin.core.renamed == ["scribe"]
 
 
+async def _command(
+    chats: _Harness, admin: _Admin, user: User, room_id: str, key: str, body: str
+) -> str:
+    sent = await chats.send(user, room_id, key, body)
+    assert sent.status_code == 200, sent.text
+    await _run(chats, admin, (await _commands(chats, room_id))[-1])
+    return admin.replies[-1][0]
+
+
+async def _room(chats: _Harness, room_id: str) -> Room:
+    async with chats.factory() as session:
+        room = await session.get(Room, room_id)
+        assert room is not None
+        return room
+
+
+def _console_admin(chats: _Harness) -> _Admin:
+    admin = _admin(chats)
+    admin.host._room_service = chats.room_service
+    return admin
+
+
 async def test_invite_from_console_needs_what_adding_an_agent_needs(
     chats: _Harness,
 ) -> None:
@@ -229,30 +251,78 @@ async def test_invite_from_console_needs_what_adding_an_agent_needs(
     await chats.agent(
         "private", owner=chats.carol, policy=owner_only_policy([]).model_dump()
     )
+    admin = _console_admin(chats)
 
-    added: list[list[str]] = []
+    assert "Only the room's owner or a workspace admin" in await _command(
+        chats, admin, chats.bob, room_id, "k1", "!invite-agent @bobs"
+    )
+    assert "You may not chat with this agent" in await _command(
+        chats, admin, chats.alice, room_id, "k2", "!invite-agent @private"
+    )
+    async with chats.factory() as session:
+        assert len(await RoomStore().get_agent_ids(session, room_id)) == 1
+    assert "Added" in await _command(
+        chats, admin, chats.alice, room_id, "k3", "!invite-agent @bobs"
+    )
+    async with chats.factory() as session:
+        assert len(await RoomStore().get_agent_ids(session, room_id)) == 2
 
-    async def add_agents_to_room(_room_id: str, *, agent_names: list[str]) -> None:
-        added.append(agent_names)
 
-    admin = _admin(chats)
-    admin.host._room_service = SimpleNamespace(  # type: ignore[assignment]
-        add_agents_to_room=add_agents_to_room
+async def test_inviting_a_second_agent_makes_a_direct_chat_a_group(
+    chats: _Harness,
+) -> None:
+    _, room_id = await _chat(chats)
+    assert (await _room(chats, room_id)).channel_type == "direct"
+    await chats.agent("second", owner=chats.alice)
+
+    await _command(
+        chats,
+        _console_admin(chats),
+        chats.alice,
+        room_id,
+        "k1",
+        "!invite-agent @second",
     )
 
-    async def invite(user: User, key: str, name: str) -> str:
-        await chats.send(user, room_id, key, f"!invite-agent @{name}")
-        row = (await _commands(chats, room_id))[-1]
-        await _run(chats, admin, row)
-        return admin.replies[-1][0]
+    assert (await _room(chats, room_id)).channel_type == "channel_private"
 
-    assert "Only the room's owner or a workspace admin" in await invite(
-        chats.bob, "k1", "bobs"
+
+async def test_inviting_with_group_chats_off_is_refused_as_adding_is(
+    chats: _Harness,
+) -> None:
+    _, room_id = await _chat(chats)
+    await chats.agent("second", owner=chats.alice)
+    chats.service.group_chats_enabled = False
+
+    reply = await _command(
+        chats,
+        _console_admin(chats),
+        chats.alice,
+        room_id,
+        "k1",
+        "!invite-agent @second",
     )
-    assert "You may not chat with" in await invite(chats.alice, "k2", "private")
-    assert added == []
-    assert "Added" in await invite(chats.alice, "k3", "bobs")
-    assert added == [["bobs"]]
+
+    assert reply == "Group chats are not turned on for this server."
+    async with chats.factory() as session:
+        assert len(await RoomStore().get_agent_ids(session, room_id)) == 1
+
+
+async def test_only_a_manager_removes_an_agent_from_console(chats: _Harness) -> None:
+    _, room_id = await _chat(chats)
+    assert (await chats.invite(chats.alice, room_id, chats.bob)).status_code == 200
+    admin = _console_admin(chats)
+
+    assert "Only the room's owner or a workspace admin" in await _command(
+        chats, admin, chats.bob, room_id, "k1", "!remove-agent @helper"
+    )
+    async with chats.factory() as session:
+        assert len(await RoomStore().get_agent_ids(session, room_id)) == 1
+    assert "Removed" in await _command(
+        chats, admin, chats.alice, room_id, "k2", "!remove-agent @helper"
+    )
+    async with chats.factory() as session:
+        assert await RoomStore().get_agent_ids(session, room_id) == []
 
 
 async def test_text_that_only_looks_like_a_command_stays_a_message(
@@ -265,6 +335,8 @@ async def test_text_that_only_looks_like_a_command_stays_a_message(
         "```\n!list-agents\n```",
         "please run !list-agents",
         "!!list",
+        "    !delete-agent @helper",
+        "\t!delete-agent @helper",
     ]
     for index, body in enumerate(bodies):
         sent = await chats.send(chats.alice, room_id, f"k{index}", body)

@@ -30,6 +30,7 @@ from switch_core.bridges.agent.protocol.types import (
     CommandPayload,
 )
 from switch_core.chats import MEMBER_CLIENT_TYPE
+from switch_core.chats.service import ChatError
 from switch_core.clients.admin_messages import AdminMessageType
 from switch_core.clients.mentions import mention_tokens as _mention_tokens
 from switch_core.db.audit import AuditAction, record_audit_event
@@ -1104,12 +1105,32 @@ async def _cmd_invite(
                 f"**{agent_label_with_identifier(target.display_name, target.name)}** is already in this room.",
             )
             return
-        refusal = await _console_invite_refusal(
-            host, session, target, meta.room_id, event
-        )
-        if refusal is not None:
-            await _reply(client, room, event, refusal)
+        console_user = await _console_chat_user(host, session, meta.room_id, event)
+        if console_user is None:
+            refusal = await _console_invite_refusal(
+                host, session, target, meta.room_id, event
+            )
+            if refusal is not None:
+                await _reply(client, room, event, refusal)
+                return
+
+    if console_user is not None:
+        # A Switch Console chat: the same add, checks and group conversion as
+        # its own add-agent.
+        try:
+            await host._room_service.chats.add_agent(
+                host.tenant_id, console_user, meta.room_id, target.id
+            )
+        except ChatError as refused:
+            await _reply(client, room, event, str(refused))
             return
+        await _reply(
+            client,
+            room,
+            event,
+            f"Added **{agent_label_with_identifier(target.display_name, target.name)}** to this room.",
+        )
+        return
 
     # `invite-agent` is admin-owned, so only the always-present admin client
     # runs this handler — the `room_service` reference lives on CommandConsumer.
@@ -1125,6 +1146,21 @@ async def _cmd_invite(
         event,
         f"Added **{agent_label_with_identifier(target.display_name, target.name)}** to this room.",
     )
+
+
+async def _console_chat_user(
+    host: CommandConsumer, session: AsyncSession, room_id: str, event: CommandEvent
+) -> User | None:
+    """The sender's Switch user when a Switch Console member sent the command
+    in a room with no messaging app — a Console chat, whose own add and remove
+    rules (`ChatService`) the command must go through — else None."""
+    sender = await host.client_store.get_by_transport_user_id(session, event.user_id)
+    if sender is None or sender.type != MEMBER_CLIENT_TYPE or not sender.user_id:
+        return None
+    found = await session.get(Room, room_id)
+    if found is None or found.bridge_id is not None:
+        return None
+    return await host._user_store.get(session, sender.user_id)
 
 
 async def _console_invite_refusal(
@@ -1206,7 +1242,10 @@ async def _cmd_remove_agent(
                 f"No agent named `{token}` in this room. Run `!list-agents`.",
             )
             return
-        if not await _may_remove_agent(host, session, target, meta.room_id, event):
+        console_user = await _console_chat_user(host, session, meta.room_id, event)
+        if console_user is None and not await _may_remove_agent(
+            host, session, target, meta.room_id, event
+        ):
             await _reply(
                 client,
                 room,
@@ -1217,7 +1256,16 @@ async def _cmd_remove_agent(
             )
             return
 
-    await host._room_service.remove_agents_from_room(meta.room_id, [target.id])
+    if console_user is not None:
+        try:
+            await host._room_service.chats.remove_agent(
+                host.tenant_id, console_user, meta.room_id, target.id
+            )
+        except ChatError as refused:
+            await _reply(client, room, event, str(refused))
+            return
+    else:
+        await host._room_service.remove_agents_from_room(meta.room_id, [target.id])
     await _reply(client, room, event, f"Removed **{_label(target)}** from this room.")
 
 

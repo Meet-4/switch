@@ -117,8 +117,9 @@ MembershipWatcher = Callable[[list[str] | None], None]
 # Fixed so the ids derived from it are stable across processes and releases.
 _CHATS_NAMESPACE = uuid.UUID("6f1d3c2e-8a4b-4f5e-9c7d-2b1a0e9f8d7c")
 
-# A typed `!command args`, as the platform bridges read one: "!!!" and "! hi" stay text.
-_TYPED_COMMAND = re.compile(r"^\s*!([a-z][a-z0-9-]*)\b(.*)", re.DOTALL)
+# A typed `!command args`, the `!` first: "!!!", "! hi" and an indented code
+# block stay text.
+_TYPED_COMMAND = re.compile(r"^!([a-z][a-z0-9-]*)\b(.*)", re.DOTALL)
 
 
 class ChatError(Exception):
@@ -624,8 +625,7 @@ class ChatService:
 
     async def stream_rooms(self, session: AsyncSession, user_id: str) -> list[Room]:
         """The caller's member rooms that are chats: unarchived, and holding an
-        agent, started in Switch Console, or moved there off a retired bridge
-        (either of which may have none)."""
+        agent, started in Switch Console, or on no messaging app."""
         client = await self.member_client(session, user_id)
         if client is None:
             return []
@@ -638,7 +638,7 @@ class ChatService:
                 or_(
                     exists().where(room_agents.c.room_id == Room.id),
                     Room.metadata_.has_key("chat_operation_id"),
-                    Room.metadata_.has_key("retired_bridge"),
+                    Room.bridge_id.is_(None),
                 ),
             )
             .order_by(Room.created_at)

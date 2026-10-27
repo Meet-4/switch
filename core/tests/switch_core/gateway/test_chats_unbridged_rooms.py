@@ -4,6 +4,7 @@ membership — against real Postgres, through the shared harness."""
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import select
 
 from switch_core.chats.views import chat_summary
@@ -76,17 +77,38 @@ async def test_adding_people_to_a_room_with_no_bridge(chats: _Harness) -> None:
     assert await _in_room(chats, room.id, chats.bob)
 
 
-async def _retiring_bridge(chats: _Harness, room: Room) -> CollaborationBridge:
+async def test_a_room_of_people_alone_is_a_chat_they_can_open(
+    chats: _Harness,
+) -> None:
+    created = await chats.room_service.create_room(
+        RoomCreateConfig(name="people", description="d", user_names=["bob"])
+    )
+    room_id = created.room.id
+
+    listed = await chats.client.get("/chats", headers=chats.as_user(chats.bob))
+    assert listed.status_code == 200, listed.text
+    assert room_id in {chat["roomId"] for chat in listed.json()["chats"]}
+    messages = await chats.client.get(
+        f"/chats/{room_id}/messages", headers=chats.as_user(chats.bob)
+    )
+    assert messages.status_code == 200, messages.text
+
+
+async def _retiring_bridge(
+    chats: _Harness, room: Room, platform: str = "mattermost"
+) -> CollaborationBridge:
     async with chats.factory() as session:
         bot = Client(
-            transport_user_id="@mm-bot:switch.test", display_name="bot", type="bridge"
+            transport_user_id=f"@{platform}-bot:switch.test",
+            display_name="bot",
+            type="bridge",
         )
         session.add(bot)
         await session.flush()
         bridge = CollaborationBridge(
             tenant_id=room.tenant_id,
-            type="mattermost",
-            display_name="Mattermost",
+            type=platform,
+            display_name=platform,
             connection_config={},
             client_id=bot.id,
             status="retiring",
@@ -189,11 +211,61 @@ async def test_a_retired_mattermost_room_moves_to_its_linked_people(
         )
 
 
-async def test_a_chat_on_a_bridge_that_is_not_active_names_no_platform(
-    chats: _Harness,
+async def test_a_room_that_fails_to_move_stays_put_until_the_next_boot(
+    chats: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    room = await _agentless_room(chats, "Mattermost: ops")
+    bridge = await _retiring_bridge(chats, room)
+    await _person_on(chats, bridge, "bob", in_room=room, claimed_by=chats.bob)
+    await _person_on(chats, bridge, "admin", in_room=room, claimed_by=chats.admin)
+    await _person_on(chats, bridge, "stranger", in_room=room, claimed_by=None)
+    join_member = chats.service.join_member
+    joins = 0
+
+    async def second_join_fails(tenant_id: str, room_id: str, target: User) -> Room:
+        nonlocal joins
+        joins += 1
+        if joins == 2:
+            raise RuntimeError("join failed")
+        return await join_member(tenant_id, room_id, target)
+
+    monkeypatch.setattr(chats.service, "join_member", second_join_fails)
+    await chats.room_service.retire_mattermost_bridges()
+
+    async with chats.factory() as session:
+        row = await session.get(Room, room.id)
+        stored = await session.get(CollaborationBridge, bridge.id)
+        assert row is not None and stored is not None
+        assert row.bridge_id == bridge.id
+        assert "retired_bridge" not in (row.metadata_ or {})
+        assert stored.status == "retiring"
+
+    monkeypatch.setattr(chats.service, "join_member", join_member)
+    await chats.room_service.retire_mattermost_bridges()
+
+    async with chats.factory() as session:
+        row = await session.get(Room, room.id)
+        stored = await session.get(CollaborationBridge, bridge.id)
+        assert row is not None and stored is not None
+        assert row.bridge_id is None
+        assert row.metadata_["retired_bridge"]["bridge_id"] == bridge.id
+        assert stored.status == "inactive"
+    readers = {
+        user.id
+        for user in (chats.alice, chats.bob, chats.carol, chats.admin)
+        if await _in_room(chats, room.id, user)
+    }
+    assert readers == {chats.bob.id, chats.admin.id}
+
+
+@pytest.mark.parametrize(
+    ("platform", "shown"), [("mattermost", None), ("slack", "slack")]
+)
+async def test_only_a_retired_mattermost_connector_names_no_platform(
+    chats: _Harness, platform: str, shown: str | None
 ) -> None:
     room = await _agentless_room(chats, "old")
-    bridge = await _retiring_bridge(chats, room)
+    bridge = await _retiring_bridge(chats, room, platform)
     async with chats.factory() as session:
         stored = await session.get(CollaborationBridge, bridge.id)
         row = await session.get(Room, room.id)
@@ -204,5 +276,4 @@ async def test_a_chat_on_a_bridge_that_is_not_active_names_no_platform(
             session, row, viewer_id=chats.alice.id, can_manage=False
         )
 
-    assert summary.bridge_type is None
-    assert summary.channel_name is None
+    assert summary.bridge_type == shown
