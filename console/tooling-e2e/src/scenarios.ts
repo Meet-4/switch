@@ -25,6 +25,8 @@ export interface ScenarioResult {
   details: string;
   transcript: ChatMessage[];
   durationMs: number;
+  /** Stop or settling failed after this scenario, so the agent may still be busy. */
+  blocksNext?: boolean;
 }
 
 export type Scenario = (harness: Harness) => Promise<ScenarioResult>;
@@ -128,11 +130,13 @@ async function scenario(
     return { name, ok: true, details, transcript, durationMs: Date.now() - started };
   } catch (error) {
     let details = error instanceof Error ? error.message : String(error);
+    let blocksNext = false;
     // Stop the turn so an unanswered card or a stuck command cannot block the next scenario.
     await harness.chat
       .control(harness.room.id, harness.agent.id, 'interrupt')
       .then(() => settle(harness, known))
       .catch((stopError: unknown) => {
+        blocksNext = true;
         details += ` (and Stop failed: ${stopError instanceof Error ? stopError.message : String(stopError)})`;
       });
     return {
@@ -141,6 +145,7 @@ async function scenario(
       details,
       transcript,
       durationMs: Date.now() - started,
+      blocksNext,
     };
   }
 }

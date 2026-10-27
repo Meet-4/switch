@@ -58,16 +58,29 @@ afterAll(async () => {
 });
 
 describe('Switch Console provider-backed session, end to end', () => {
+  let blockedBy: string | null = null;
   for (const runScenario of SCENARIOS) {
     // The scenario functions are named after the behaviour they exercise, so the
     // test name comes from the function rather than being restated here.
-    it(runScenario.name, async () => {
+    it(runScenario.name, async (ctx) => {
       if (skip) {
         console.log(`SKIPPED (${runScenario.name}): ${skip}`);
         return;
       }
+      if (blockedBy) {
+        // A late card from the stuck turn would look like this scenario's own.
+        results.push({
+          name: runScenario.name,
+          ok: false,
+          details: `blocked: ${blockedBy} did not stop cleanly`,
+          transcript: [],
+          durationMs: 0,
+        });
+        ctx.skip();
+      }
       const result = await runScenario(harness!);
       results.push(result);
+      if (result.blocksNext) blockedBy = result.name;
       if (!result.ok) {
         console.log(
           `${result.name} transcript:\n` +
