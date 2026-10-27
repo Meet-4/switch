@@ -1,0 +1,94 @@
+# Switch expert
+
+An agent you stand up yourself that answers questions about Switch and helps you design
+and build things with it.
+
+There is no service to sign up for. This folder is the agent: a block of instructions plus
+the knowledge it reads. You create an agent on your own machine, give it these
+instructions, and it does the rest.
+
+## Stand one up
+
+Use **Switch Console**. It creates the agent, gives it its identity and credentials, and
+holds its instructions — an agent set up outside it does not connect to Switch properly.
+
+**The short way: the template.** Open **Templates** in Switch Console, pick **Switch
+expert**, choose where it starts (on its own, in a new room made for it, or in a room
+you pick), and click Create. The server creates it on one of your machines (the first
+online one that can run it, unless you choose under Advanced), with this repository to
+clone into its working directory, and, for a new room, puts it there with you and says
+hello so it starts answering. It needs a server that runs agent management. The template
+is [`template.yaml`](template.yaml), written in version 2 of the template format.
+
+**The long way, by hand:**
+
+1. **Add an agent in Switch Console.** Give it a name, a description, a **Directory** to
+   work in, and a **Run location** — this computer, or a host you have added under Remote
+   hosts. It attaches to the server you are on; there is no server to pick.
+2. **Paste the contents of [`AGENT.md`](AGENT.md)** into **Agent instructions**.
+3. **That's it.** The first thing it does is clone this repository into a `switch/`
+   subdirectory of its working directory and read the knowledge files below. You do not
+   need to copy anything.
+
+Then invite it to a room and bridge that room to your team's chat, so people reach it where
+they already work. Give it a short nickname in the room so nobody has to type its full
+name, and widen **Who can talk to your agent** if teammates need it — a new agent answers
+only its owner.
+
+Run it somewhere that stays up. It can only answer while it is running, so if a team is
+going to rely on it, that means a server rather than a laptop that closes.
+
+> Switch supports agents run from Switch Console, its sidecar or its agent controller; a
+> CLI started by hand gets no Switch tools of its own.
+
+## What it reads
+
+| File | What it is |
+|---|---|
+| [`knowledge/INDEX.md`](knowledge/INDEX.md) | What each file is for and when to read it. The agent starts here. |
+| [`knowledge/CONCEPTS.md`](knowledge/CONCEPTS.md) | The mental model, in plain language. |
+| [`knowledge/PATTERNS.md`](knowledge/PATTERNS.md) | Reusable patterns for shaping a setup. |
+| [`knowledge/RECIPES.md`](knowledge/RECIPES.md) | Worked setups to copy and adapt. |
+| [`knowledge/CHECKLIST.md`](knowledge/CHECKLIST.md) | What to settle before building anything. |
+| [`knowledge/GOTCHAS.md`](knowledge/GOTCHAS.md) | Traps that cost people days. |
+| [`CORRECTIONS.md`](CORRECTIONS.md) | Where being wrong gets recorded. |
+
+It also reads the rest of this repository — the root `README.md` for what Switch is and why
+anyone would use it, `docs/` for how Switch is designed, and the source when the docs are
+silent. How rooms and messaging mechanically work comes from the Switch skill it is
+handed when it joins a room, so it never needs to go looking for that.
+
+## How this stays current
+
+Switch changes weekly, and a knowledge file that goes quietly out of date is worse than no
+knowledge file at all: it answers confidently and wrongly, and you have no way to tell.
+Three things keep that in check.
+
+**It lives in the product repository.** Changing how Switch behaves and changing what the
+expert knows about it are the same pull request, reviewed together. There is no separate
+place someone has to remember to update.
+
+**It re-reads rather than remembers.** The agent pulls this repository at the start of
+every conversation. The fastest-moving material — how rooms and messaging work — is not
+copied into these files at all; it comes from the Switch skill, which ships and is
+versioned with the server and is loaded into the agent when it joins a room. Versions,
+download links and UI labels are never written down as values, only as instructions for
+looking them up.
+
+**Being wrong has somewhere to land.** [`CORRECTIONS.md`](CORRECTIONS.md) is an
+append-only log. The agent is told to write there the moment it is proven wrong and to open
+a pull request with the fix. Each knowledge file carries a line saying what it was last
+checked against, and the agent tells you when it is answering from something older than the
+server you are asking about.
+
+## When it doesn't know
+
+It says so, says where the answer would live, and offers to go and look. It does not invent
+a version number, a URL or a menu item. If you catch it doing so, that is a correction —
+tell it, and it will log it.
+
+## Contributing
+
+Corrections and additions are welcome as pull requests. If you are fixing something the
+agent got wrong, add the entry to `CORRECTIONS.md` as well as fixing the knowledge file, so
+the record of what was wrong survives.

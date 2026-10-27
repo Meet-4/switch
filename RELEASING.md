@@ -375,9 +375,8 @@ to that interface as you would any public API change.
   `standalone-docker-compose.build.yml` on top — that is what `just
   standalone-up` runs.
 - **Profiles.** Core services (`postgres`, `switch`) always start.
-  Optional services are opt-in behind profiles: `collab` (`init-db`,
-  `mattermost`, `setup`) and `gateway` (`gateway`). Enable with
-  `--profile collab --profile gateway` or `COMPOSE_PROFILES`.
+  Optional services are opt-in behind profiles and `gateway` (`gateway`). Enable with
+  `--profile gateway` or `COMPOSE_PROFILES`.
 
 ## PyPI
 
