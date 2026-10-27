@@ -68,6 +68,13 @@ version of their own to them without also giving them a release of their own.
   Atlassian, whose tokens cannot be asked for shorter.
 
 #### Added
+- **The `[CONN]` log lines say when a client fell back to the event stream.**
+  `/events` takes optional `fallback` and `fallback_close_code` parameters,
+  and the `[CONN] opened` and `[CONN] reattached` lines end with
+  `fallback=<reason>:<close code>` only when they are present, so a new agent
+  runtime whose WebSocket never opened is told apart from a client built
+  before the socket. Unknown reasons log as `other` and anything but a short
+  numeric close code is dropped.
 - **Templates carry packages.** A room in a template takes `packages:`, a list
   of packages that already exist, by `id` or by `name`, attached when the room
   is created. The person running the template must be able to attach each one
@@ -118,6 +125,17 @@ version of their own to them without also giving them a release of their own.
   compares it only when someone signs in.
 
 #### Changed
+- **A cloud machine can move to another instance type and keep its disk.**
+  The hosted controller now launches every new instance of a machine as the
+  instance type in its `gateway.json`, at the same moment it already moves the
+  machine onto the configured image, and `upgrade --gateway-config` moves a
+  stopped machine onto both. Changing `instance_type` therefore resizes
+  existing machines as well as new ones; a machine that only stops and starts
+  keeps its instance and type. `allowed_instance_types` is no longer bound to
+  the controller's state database, so it can change while machines exist, and
+  `status` and `list` report `instance_type_allowed` for each machine. A
+  database bound before this release is accepted and rebound on first start,
+  as long as `allowed_instance_types` has not changed in the same deploy.
 - **Agents and controllers are pinged every 10 seconds instead of every 2.**
   A connection is now declared dead after 30 seconds without a beat, up from
   6, so a client that goes away holds its room slot and shows online for up to
@@ -151,6 +169,14 @@ version of their own to them without also giving them a release of their own.
   Existing duplicates are left as they are and can be reached by id.
 
 #### Fixed
+- **The agent HTTP API answers a refused or malformed request with a 4xx, not
+  a 500.** Inviting an agent to a room the caller may not change answered 500
+  instead of 403, and so did looking up a room the agent is not in. A room
+  history request whose `since` or `before` is not an ISO 8601 timestamp
+  answered 500 instead of 400; it now says which parameter was wrong, and so
+  does `read_context` (#1045). One whose offset moves it outside the years 1
+  to 9999 in UTC is refused the same way instead of answering 404, and a time
+  in the last millisecond of 9999 is no longer refused at all.
 - **Creating a user refuses a role the server does not understand.** An
   account is a user or an admin, and only the exact role `admin` grants
   operator rights. `POST /users` accepted any role string, so `Admin` or
@@ -2047,6 +2073,18 @@ version of their own to them without also giving them a release of their own.
   skill said a request card needed the owner's linked identity and room
   membership. Its addressing policy decides, and agents now read theirs with
   `get_agent_detail` and name the people who can answer.
+- **A Codex session explains why a keyring login is not available to it.**
+  Each session runs in its own Codex home, which receives the machine's
+  `auth.json` but not a login stored in the OS keyring, so a machine signed in
+  with keyring storage (`cli_auth_credentials_store = "keyring"` or `"auto"`)
+  failed with only "Sign in on the execution machine with codex login" while
+  `codex login status` said it was signed in. The error now says that sessions
+  cannot use a keyring login, and gives the workaround for a machine whose
+  organization does not enforce the keyring: switch Codex to file storage,
+  which keeps the login in plaintext, sign in again and start a new session.
+  Giving this computer's Codex login to a machine says the same instead of
+  "This computer is not signed in to codex". Keyring logins are still not
+  supported in Switch sessions (#1048).
 
 ### [0.40.1] - 2026-10-21
 
@@ -4103,6 +4141,13 @@ The Switch protocol client and MCP runtime
 (`console/packages/switch-agent-runtime/`). Version lives in its `package.json`.
 
 ### [Unreleased]
+
+#### Added
+- When the WebSocket never opens and the runtime asks for the event stream
+  instead, the request carries `fallback=socket_never_opened` and the
+  socket's close code as `fallback_close_code`, so the server's log can tell
+  it from a client built before the socket. Opening the event stream straight
+  away, against an old server, sends neither.
 
 ### [0.8.0] - 2026-09-25
 
