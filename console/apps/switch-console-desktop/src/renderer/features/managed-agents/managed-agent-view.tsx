@@ -4,11 +4,7 @@ import type { ReactNode } from 'react';
 import type { GuardResult, ViewDefinition } from '@renderer/app/view-registry';
 import { ChatHeaderControls } from '@renderer/features/chats/components/chat-header';
 import { useAgentActivities } from '@renderer/features/chats/components/chat-panel';
-import {
-  embeddedRoomFallbackTab,
-  OpenInMessagingApp,
-  RoomTabs,
-} from '@renderer/features/switch-rooms/view';
+import { OpenInMessagingApp, RoomTabs } from '@renderer/features/switch-rooms/view';
 import { ServerPage } from '@renderer/features/switch-servers/server-page';
 import {
   ServerStatusPill,
@@ -114,7 +110,7 @@ const ManagedAgentTitlebar = observer(function ManagedAgentTitlebar() {
             </span>
             {room && (
               <span className="shrink-0 [-webkit-app-region:no-drag]">
-                <RoomTabs roomId={room} fallback={embeddedRoomFallbackTab(room)} />
+                <RoomTabs roomId={room} fallback="configuration" />
               </span>
             )}
           </div>

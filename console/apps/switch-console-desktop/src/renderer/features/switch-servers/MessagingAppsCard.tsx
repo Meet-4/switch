@@ -4,7 +4,6 @@ import {
   Copy,
   ExternalLink,
   Info,
-  KeyRound,
   Link2,
   MessageSquare,
   MoreVertical,
@@ -98,9 +97,6 @@ export const MessagingAppsCard = observer(function MessagingAppsCard({
   const showConnectChat = useShowModal('connectChatModal');
   const workspaceId = workspacesStore.idOnServerInScope(serverId);
   const isAdmin = administersWorkspaceInScope(serverId);
-  // Only a stack Switch Console runs has a chat whose credentials it generated and
-  // can therefore show; anyone else's Mattermost is their own to hand out.
-  const isManaged = !!switchServersStore.servers.find((s) => s.id === serverId)?.managed;
 
   const bridgesQuery = useQuery({
     queryKey: ['remote-bridges', workspaceId],
@@ -278,7 +274,7 @@ export const MessagingAppsCard = observer(function MessagingAppsCard({
       ) : bridges.length === 0 && !bridgesQuery.isLoading ? (
         <p className="mt-3 text-xs text-foreground-muted">
           {isAdmin
-            ? 'No messaging app is connected, so rooms created here would be unreachable. Connect one to get started.'
+            ? 'No messaging app is connected. Rooms are chats in Switch Console; connect one to reach them from Slack, Discord, Teams or Telegram too.'
             : 'No messaging app is connected. An owner or admin of this workspace can connect one.'}
         </p>
       ) : (
@@ -287,7 +283,6 @@ export const MessagingAppsCard = observer(function MessagingAppsCard({
             <Fragment key={bridge.id}>
               <MessagingAppRow
                 workspaceId={workspaceId}
-                serverId={serverId}
                 bridge={bridge}
                 /* Nothing is drawn in the identity column until the list
                     arrives: "not linked" and "not known yet" look identical,
@@ -296,7 +291,6 @@ export const MessagingAppsCard = observer(function MessagingAppsCard({
                 identities={identities}
                 currentUserId={currentUserId}
                 onReleased={refreshIdentities}
-                showBundledSignIn={isManaged && bridge.type === 'mattermost'}
                 isAdmin={isAdmin}
                 savingChannelCreation={savingBridgeId === bridge.id}
                 onToggleChannelCreation={(enabled) =>
@@ -371,12 +365,10 @@ export const MessagingAppsCard = observer(function MessagingAppsCard({
  */
 export function MessagingAppRow({
   workspaceId,
-  serverId,
   bridge,
   identities,
   currentUserId,
   onReleased,
-  showBundledSignIn,
   isAdmin,
   savingChannelCreation,
   onToggleChannelCreation,
@@ -386,14 +378,11 @@ export function MessagingAppRow({
   /** Null while this install has not resolved the server's workspace; the
    *  identity actions are the only thing that needs it, and they wait. */
   workspaceId: string | null;
-  /** Only for the bundled chat's sign-in, which is about the gateway. */
-  serverId: string;
   bridge: RemoteBridge;
   /** Accounts the user has claimed in this workspace, or null while unknown. */
   identities: LinkedIdentity[] | null;
   currentUserId: string | null;
   onReleased: () => void;
-  showBundledSignIn: boolean;
   isAdmin: boolean;
   savingChannelCreation: boolean;
   onToggleChannelCreation: (enabled: boolean) => void;
@@ -403,7 +392,6 @@ export function MessagingAppRow({
   onDisconnect: () => void;
 }) {
   const showClaimIdentity = useShowModal('claimIdentityModal');
-  const showBundledChatSignIn = useShowModal('bundledChatSignInModal');
   const showTeamsPlacement = useShowModal('teamsPlacementModal');
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
@@ -629,17 +617,7 @@ export function MessagingAppRow({
               </>
             )}
 
-            {(showBundledSignIn || bridge.homeUrl) && <DropdownMenuSeparator />}
-            {showBundledSignIn && (
-              <DropdownMenuItem
-                onClick={() =>
-                  showBundledChatSignIn({ serverId, bridgeDisplayName: bridge.displayName })
-                }
-              >
-                <KeyRound className="size-4" />
-                Sign-in details…
-              </DropdownMenuItem>
-            )}
+            {bridge.homeUrl && <DropdownMenuSeparator />}
             {/* Offered only when the link resolves — an older server, or a bridge
               that is down, reports none. */}
             {bridge.homeUrl && (
