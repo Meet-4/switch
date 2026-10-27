@@ -15,7 +15,7 @@ from switch_decision.prompt import NONE
 
 SECRET_TEXT = "zebra-quartz-7731 rollback the purple cluster"
 ROOM_RULES = "never-log-these-room-rules-4412"
-ANTHROPIC_KEY = "placeholder-anthropic-key-0001"
+ANTHROPIC_KEY = "placeholder-anthropic-key-0001"  # gitleaks:allow
 
 BODY = {
     "room": {"name": "eng-secret-room", "instructions": ROOM_RULES},

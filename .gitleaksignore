@@ -9,3 +9,9 @@ f1eaba23f82611562b478aaed85687c1bd99e8e0:core/tests/switch_core/test_migration_h
 # A made-up token in a service-token expiry test, never issued by anything;
 # the test now uses one that is not token-shaped.
 ba77a51d9d28c70e0e37b29031983cf6fff477b5:console/packages/agent-providers/src/host/service-access.test.ts:generic-api-key:17
+
+# Made-up Anthropic keys in the decision-routing tests (a settings route test
+# and the decision service's API test), never issued by anything; the tests
+# now use values that are not key-shaped or carry gitleaks:allow.
+eddfbb9ff41e50418a56223537f165e78e8dd8e5:core/tests/switch_core/gateway/test_decision_settings.py:generic-api-key:272
+f72baae32ebfbd6e2c1055e4a4fa48aaa6256f08:decision/tests/test_api.py:generic-api-key:18
