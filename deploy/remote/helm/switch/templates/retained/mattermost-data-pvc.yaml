@@ -1,0 +1,23 @@
+{{- $name := printf "%s-mattermost-data" (include "switch.fullname" .) }}
+{{- with lookup "v1" "PersistentVolumeClaim" .Release.Namespace $name }}
+# shortcut: kept only so upgrades leave the old Mattermost volume behind; delete in a later release
+# Rendered only where an earlier release created it (lookup sees nothing in
+# `helm template`, so fresh installs get no volume). Nothing mounts it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "switch.labels" $ | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    {{- toYaml .spec.accessModes | nindent 4 }}
+  {{- with .spec.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .spec.resources.requests.storage }}
+{{- end }}

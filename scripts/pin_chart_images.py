@@ -125,9 +125,6 @@ IMAGES: dict[str, Image] = {
     "gateway": Image(
         "switch", "gateway", "deploy/shared_resources/images/Dockerfile.gateway", "."
     ),
-    "setup": Image(
-        "switch", "setup", "deploy/shared_resources/images/Dockerfile.setup", "."
-    ),
     "switch-hosted-controller": Image(
         "switch-hosted-controller",
         "image",
