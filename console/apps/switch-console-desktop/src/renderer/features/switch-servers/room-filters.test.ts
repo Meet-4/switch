@@ -115,10 +115,17 @@ describe('withConsoleGroupChats', () => {
         chat('b'),
         chat('c', { channelType: 'direct' }),
         chat('e', { bridgeType: 'slack' }),
-      ]
+      ],
+      false
     );
     expect(listed.map((each) => each.id)).toEqual(['a', 'b', 'd']);
     expect(listed[1].ownerId).toBe('u');
+  });
+
+  it('adds a readable 1-1 chat the room list lacks when 1-1 chats are listed', () => {
+    const direct = chat('d', { channelType: 'direct' });
+    expect(withConsoleGroupChats([], [direct], true).map((each) => each.id)).toEqual(['d']);
+    expect(withConsoleGroupChats([], [direct], false)).toEqual([]);
   });
 });
 

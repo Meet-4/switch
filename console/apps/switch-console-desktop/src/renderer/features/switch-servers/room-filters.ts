@@ -41,17 +41,23 @@ export function isConsoleGroupChatSummary(
 }
 
 /**
- * `rooms` and, as rooms, the group chats not among them: the room list holds
- * only rooms you own or that are public, so a person invited to a chat would
- * not see it otherwise.
+ * `rooms` and, as rooms, the group chats not among them (and the 1-1 chats,
+ * when `withDirect`): the room list holds only rooms you own or that are
+ * public, so a person invited to a chat would not see it otherwise.
  */
 export function withConsoleGroupChats(
   rooms: RemoteRoomSummary[],
-  chats: Iterable<ChatSummary>
+  chats: Iterable<ChatSummary>,
+  withDirect: boolean
 ): RemoteRoomSummary[] {
   const listed = new Set(rooms.map((room) => room.id));
   const added = [...chats]
-    .filter((chat) => isConsoleGroupChatSummary(chat) && !listed.has(chat.roomId))
+    .filter(
+      (chat) =>
+        chat.bridgeType === null &&
+        (withDirect || !isConsoleDirectChatSummary(chat)) &&
+        !listed.has(chat.roomId)
+    )
     .map(
       (chat): RemoteRoomSummary => ({
         id: chat.roomId,

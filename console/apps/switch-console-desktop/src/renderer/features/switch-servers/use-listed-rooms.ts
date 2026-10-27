@@ -34,7 +34,8 @@ export function useListedRoomsInActiveScope(): RemoteRoomSummary[] {
         switchRoomsStore.listedRoomsInActiveScope,
         hidesConsoleDirectChats(flags)
       ),
-      flags.agent_chats ? chatsStore.chats.values() : []
+      flags.agent_chats ? chatsStore.chats.values() : [],
+      !hidesConsoleDirectChats(flags)
     )
   ).get();
 }
@@ -52,6 +53,7 @@ export function useReadableRoomsInWorkspace(workspaceId: string | null): RemoteR
       switchRoomsStore.readableRoomsInWorkspace(workspaceId),
       hidesConsoleDirectChats(flags)
     ),
-    flags.agent_chats && workspaceId === workspacesStore.activeId ? chatsStore.chats.values() : []
+    flags.agent_chats && workspaceId === workspacesStore.activeId ? chatsStore.chats.values() : [],
+    !hidesConsoleDirectChats(flags)
   );
 }
