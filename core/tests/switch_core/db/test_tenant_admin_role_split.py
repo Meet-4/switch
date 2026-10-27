@@ -2,13 +2,13 @@
 
 Before this change, `authz.Principal.is_admin` came from `users.role ==
 "admin"` alone — a global bit that `tenant_members.role` never fed into. So a
-workspace's `owner` membership row granted nothing: every admin-gated route
+workspace's `owner` (now `admin`) membership row granted nothing: every admin-gated route
 checked the global bit, never the caller's role in the tenant the request is
 bound to.
 
 These tests pin the behavioural claims that split makes true:
 
-- a workspace `owner` can administer resources in *their own* tenant;
+- a workspace `admin` can administer resources in *their own* tenant;
 - the same person has no such power in a tenant they only hold a `member`
   row in — `UserStore.administers` must read the *bound* tenant's row, not
   any row belonging to the caller;
@@ -70,7 +70,7 @@ class TestUserStoreAdministers:
         store = UserStore()
         async with session_factory() as session:
             owner = await _make_user(session, "owner-of-zero")
-            await _membership(session, TENANT_ZERO_ID, owner.id, "owner")
+            await _membership(session, TENANT_ZERO_ID, owner.id, "admin")
             await session.commit()
 
             # Ambient tenant is TENANT_ZERO_ID (see conftest.session_factory).
@@ -89,7 +89,7 @@ class TestUserStoreAdministers:
         async with session_factory() as session:
             tenant_b = await _make_tenant(session, TENANT_B)
             owner = await _make_user(session, "cross-tenant-owner")
-            await _membership(session, TENANT_ZERO_ID, owner.id, "owner")
+            await _membership(session, TENANT_ZERO_ID, owner.id, "admin")
             await _membership(session, tenant_b.id, owner.id, "member")
             await session.commit()
 
@@ -161,7 +161,7 @@ class TestUserStoreAdministers:
         store = UserStore()
         async with session_factory() as session:
             owner = await _make_user(session, "unbound-owner")
-            await _membership(session, TENANT_ZERO_ID, owner.id, "owner")
+            await _membership(session, TENANT_ZERO_ID, owner.id, "admin")
             await session.commit()
 
             with no_tenant():
@@ -197,7 +197,7 @@ class TestRoomAuthzThroughTenantRole:
         async with session_factory() as session:
             owner = await _make_user(session, "room-admin-owner")
             someone_else = await _make_user(session, "room-creator")
-            await _membership(session, TENANT_ZERO_ID, owner.id, "owner")
+            await _membership(session, TENANT_ZERO_ID, owner.id, "admin")
             room = Room(
                 tenant_id=TENANT_ZERO_ID,
                 transport_room_id="!private-room:test",
@@ -221,7 +221,7 @@ class TestRoomAuthzThroughTenantRole:
             tenant_b = await _make_tenant(session, TENANT_B)
             owner = await _make_user(session, "room-admin-owner-2")
             someone_else = await _make_user(session, "room-creator-2")
-            await _membership(session, TENANT_ZERO_ID, owner.id, "owner")
+            await _membership(session, TENANT_ZERO_ID, owner.id, "admin")
             await _membership(session, tenant_b.id, owner.id, "member")
             room = Room(
                 tenant_id=TENANT_ZERO_ID,
