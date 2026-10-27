@@ -26,6 +26,30 @@ export interface ChatMessage {
   threadRootId: string | null;
 }
 
+/** An agent's open question or permission request — what Console draws as a card. */
+export interface ChatRequest {
+  agentId: string;
+  sessionId: string;
+  requestId: string;
+  kind: 'approval' | 'questions';
+  state: string;
+  title: string;
+  detail: string | null;
+  options: { id: string; label: string; decision: string }[];
+  questions: {
+    id: string;
+    title: string;
+    prompt: string;
+    options: { id: string; label: string; description: string | null }[];
+  }[];
+}
+
+export type ChatRequestAnswer =
+  | { answer: string }
+  | {
+      answers: { questionId: string; selectedOptionIds: string[]; customText: string | null }[];
+    };
+
 export interface ChatUser {
   id: string;
   name: string;
@@ -111,6 +135,44 @@ export class ConsoleChatClient {
       { requestId: randomUUID(), agentId, command }
     );
     return body.commandId;
+  }
+
+  /** `GET /gateway/chats/{room}/activity` — the room's requests, in every state. */
+  async requests(roomId: string): Promise<ChatRequest[]> {
+    const activity = await this.request<{ approvals: ChatRequest[] }>(
+      'GET',
+      `/chats/${encodeURIComponent(roomId)}/activity`
+    );
+    return activity.approvals;
+  }
+
+  /** `POST /gateway/agent-sessions/{agent}/{session}/approvals/{request}/answer` — the card's Submit. */
+  async answer(request: ChatRequest, answer: ChatRequestAnswer): Promise<void> {
+    const path = [request.agentId, request.sessionId, 'approvals', request.requestId]
+      .map(encodeURIComponent)
+      .join('/');
+    await this.request('POST', `/agent-sessions/${path}/answer`, answer);
+  }
+
+  /** Wait for an open request of `kind` from `agentId` in the room, or null at the deadline. */
+  async waitForOpenRequest(params: {
+    roomId: string;
+    agentId: string;
+    kind: ChatRequest['kind'];
+    deadlineMs: number;
+  }): Promise<ChatRequest | null> {
+    const until = Date.now() + params.deadlineMs;
+    for (;;) {
+      const match = (await this.requests(params.roomId)).find(
+        (request) =>
+          request.state === 'open' &&
+          request.agentId === params.agentId &&
+          request.kind === params.kind
+      );
+      if (match) return match;
+      if (Date.now() >= until) return null;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
   }
 
   /** `GET /gateway/chats/{room}/messages` — messages after `afterSeq`, oldest first. */

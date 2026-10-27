@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ChatMessage } from './console-chat-client.ts';
+import type { ChatMessage, ChatRequest } from './console-chat-client.ts';
 import type { Harness } from './harness.ts';
 import { sleep } from './switch-client.ts';
 
@@ -107,6 +107,7 @@ export const OK_MARKER = 'SWITCH_E2E_OK';
  * whatever the body managed to record.
  */
 async function scenario(
+  harness: Harness,
   name: string,
   body: (record: (posts: ChatMessage[]) => void) => Promise<string>
 ): Promise<ScenarioResult> {
@@ -123,10 +124,17 @@ async function scenario(
     const details = await body(record);
     return { name, ok: true, details, transcript, durationMs: Date.now() - started };
   } catch (error) {
+    let details = error instanceof Error ? error.message : String(error);
+    // Stop the turn so an unanswered card or a stuck command cannot block the next scenario.
+    await harness.chat
+      .control(harness.room.id, harness.agent.id, 'interrupt')
+      .catch((stopError: unknown) => {
+        details += ` (and Stop failed: ${stopError instanceof Error ? stopError.message : String(stopError)})`;
+      });
     return {
       name,
       ok: false,
-      details: error instanceof Error ? error.message : String(error),
+      details,
       transcript,
       durationMs: Date.now() - started,
     };
@@ -171,6 +179,49 @@ async function expectBotPost(
   return match;
 }
 
+/**
+ * Wait for the agent's open question or permission request in the room — the
+ * card Console draws in place of room text — or throw with the transcript.
+ */
+async function expectRequest(
+  harness: Harness,
+  params: {
+    since: number;
+    kind: ChatRequest['kind'];
+    describe: string;
+    record: (posts: ChatMessage[]) => void;
+  }
+): Promise<ChatRequest> {
+  const request = await harness.chat.waitForOpenRequest({
+    roomId: harness.room.id,
+    agentId: harness.agent.id,
+    kind: params.kind,
+    deadlineMs: REPLY_DEADLINE_MS,
+  });
+  if (request) return request;
+  const transcript = await harness.chat.messagesAfter(harness.room.id, params.since);
+  params.record(transcript);
+  assertNotNoSession(transcript);
+  throw new Error(`Timed out waiting for ${params.describe}. Room said: ${summarise(transcript)}`);
+}
+
+/** Answer a permission card with its plain allow, after checking it is for `mention`. */
+async function allowRequest(
+  harness: Harness,
+  request: ChatRequest,
+  mention: string
+): Promise<void> {
+  const shown = `${request.title}\n${request.detail ?? ''}`;
+  if (!shown.includes(mention))
+    throw new Error(`The permission request does not name ${mention}: «${shown}»`);
+  const allow = request.options.find((option) => option.decision === 'accept');
+  if (!allow)
+    throw new Error(
+      `The permission request offers no allow option: ${JSON.stringify(request.options)}`
+    );
+  await harness.chat.answer(request, { answer: allow.id });
+}
+
 function summarise(posts: ChatMessage[]): string {
   if (posts.length === 0) return '(nothing at all — no session ever replied)';
   return posts.map((post) => `«${post.body.replace(/\s+/g, ' ').slice(0, 160)}»`).join(' | ');
@@ -190,7 +241,7 @@ function lower(post: ChatMessage): string {
  * running for the agent, or nothing is relaying the room's events into it.
  */
 export const greet: Scenario = (harness) =>
-  scenario('greet', async (record) => {
+  scenario(harness, 'greet', async (record) => {
     const since = await ask(harness, `reply with exactly ${OK_MARKER} and nothing else`);
     const match = await expectBotPost(harness, {
       since,
@@ -208,14 +259,14 @@ const CHOSEN = 'green';
 
 /**
  * A two-turn exchange: the agent asks a clarifying question, the human answers
- * in the room, and the agent uses the answer.
+ * it (the card, or in the room for a prose question), and the agent uses the answer.
  *
  * This is the round trip a one-shot reply cannot fake — it only passes if the
  * session is still alive and still connected to the room when the second message
  * arrives, which is the thing an injected-prompt runtime most easily gets wrong.
  */
 export const question: Scenario = (harness) =>
-  scenario('question', async (record) => {
+  scenario(harness, 'question', async (record) => {
     const prose = harness.env.questionMode === 'prose';
     const since = await ask(
       harness,
@@ -228,25 +279,44 @@ export const question: Scenario = (harness) =>
             `exactly the options ${CHOICES.join(', ')}. Then reply with the single word I chose.`
     );
 
-    const asked = await expectBotPost(harness, {
-      since,
-      record,
-      // The console relays a native question into the room as a numbered list;
-      // a plain-prose question also lists the three options, so the numbering is
-      // what proves the relay path was taken — and is exactly what cannot be
-      // required of a provider that offers SDK sessions no such tool.
-      predicate: (post) =>
-        CHOICES.every((choice) => lower(post).includes(choice)) &&
-        (prose || /\b2\.\s/.test(post.body)),
-      describe: prose
-        ? `a question listing the options ${CHOICES.join('/')}`
-        : `a relayed question numbering the options ${CHOICES.join('/')}`,
-    });
+    let asked: string;
+    let answeredAt = since;
+    if (prose) {
+      asked = (
+        await expectBotPost(harness, {
+          since,
+          record,
+          predicate: (post) => CHOICES.every((choice) => lower(post).includes(choice)),
+          describe: `a question listing the options ${CHOICES.join('/')}`,
+        })
+      ).messageId;
+      answeredAt = await ask(harness, CHOSEN);
+    } else {
+      // A native question is not posted into the room: Console draws it as a
+      // card and answers it through Switch, as the harness does here.
+      const request = await expectRequest(harness, {
+        since,
+        kind: 'questions',
+        describe: `a question card offering ${CHOICES.join('/')}`,
+        record,
+      });
+      const color = request.questions.find(
+        (q) =>
+          `${q.title} ${q.prompt}`.toLowerCase().includes('color') &&
+          CHOICES.every((choice) => q.options.some((o) => o.label.toLowerCase() === choice))
+      );
+      if (!color)
+        throw new Error(
+          `The question card is not "Which color?" with ${CHOICES.join('/')}: ${JSON.stringify(request.questions)}`
+        );
+      const chosen = color.options.find((o) => o.label.toLowerCase() === CHOSEN)!;
+      await harness.chat.answer(request, {
+        answers: [{ questionId: color.id, selectedOptionIds: [chosen.id], customText: null }],
+      });
+      asked = `card ${request.requestId}`;
+    }
 
-    // By number where the relay is what reads the answer; by word where the
-    // agent itself is. The relay's acknowledgement names the choice too, so the
-    // agent's own reply must be told apart from it either way.
-    const answeredAt = await ask(harness, prose ? CHOSEN : '2');
+    // The agent's own reply, told apart from any acknowledgement naming the choice.
     const answer = await expectBotPost(harness, {
       since: answeredAt,
       record,
@@ -254,17 +324,15 @@ export const question: Scenario = (harness) =>
       describe: `a reply naming my choice '${CHOSEN}'`,
     });
 
-    return `asked in ${asked.messageId}, answered in ${answer.messageId}`;
+    return `asked in ${asked}, answered in ${answer.messageId}`;
   });
 
 // ── approval ─────────────────────────────────────────────────────────────────
 
-const APPROVAL_HINTS = ['approve', 'approval', 'permission', 'allow', 'permit', 'proceed'];
-
 /**
  * A tool call the agent is not pre-authorised to make: the session must surface
- * the permission request into the room, take `1` (allow) from the room, and
- * then actually run the command.
+ * the permission request as a card in the room, take its allow from the
+ * person, and then actually run the command.
  *
  * Requires the agent's session to be running WITHOUT auto-approve. Note that an
  * OpenCode agent's registered profile declares no `pre_invocation_mediation`, so
@@ -273,31 +341,29 @@ const APPROVAL_HINTS = ['approve', 'approval', 'permission', 'allow', 'permit', 
  * is the scenario most tightly coupled to that runtime.
  */
 export const approval: Scenario = (harness) =>
-  scenario('approval', async (record) => {
+  scenario(harness, 'approval', async (record) => {
     const file = `approved-${harness.runId}.txt`;
     const since = await ask(
       harness,
       `run the shell command \`echo ${OK_MARKER} > ${file}\` and then reply with the single word done`
     );
 
-    const prompt = await expectBotPost(harness, {
+    const prompt = await expectRequest(harness, {
       since,
+      kind: 'approval',
+      describe: 'a permission card for the shell command',
       record,
-      predicate: (post) =>
-        APPROVAL_HINTS.some((hint) => lower(post).includes(hint)) ||
-        /(^|\n)\s*1[.)]/.test(post.body),
-      describe: 'an approval prompt for the shell command',
     });
+    await allowRequest(harness, prompt, file);
 
-    const approvedAt = await ask(harness, '1');
     const done = await expectBotPost(harness, {
-      since: approvedAt,
+      since,
       record,
       predicate: (post) => lower(post).includes('done'),
       describe: "a 'done' reply after the command was approved",
     });
 
-    return `prompted in ${prompt.messageId}, completed in ${done.messageId}`;
+    return `prompted in card ${prompt.requestId}, completed in ${done.messageId}`;
   });
 
 // ── interrupt ────────────────────────────────────────────────────────────────
@@ -318,7 +384,7 @@ async function markerContents(file: string): Promise<string | null> {
 
 /** A real local command must start and then be cancelled before its final write. */
 export const interrupt: Scenario = (harness) =>
-  scenario('interrupt', async (record) => {
+  scenario(harness, 'interrupt', async (record) => {
     const dir = harness.env.agentRepoDir;
     if (!dir)
       throw new Error('The interrupt scenario requires SWITCH_E2E_AGENT_DIR on this machine.');
@@ -330,13 +396,13 @@ export const interrupt: Scenario = (harness) =>
       harness,
       `Run this exact shell command for a bounded cancellation test: \`${command}\`. Wait for completion before replying. Do not create these files with another tool.`
     );
-    await expectBotPost(harness, {
+    const prompt = await expectRequest(harness, {
       since,
-      record,
-      predicate: (post) => APPROVAL_HINTS.some((hint) => lower(post).includes(hint)),
+      kind: 'approval',
       describe: 'permission to run the cancellation command',
+      record,
     });
-    await ask(harness, '1');
+    await allowRequest(harness, prompt, stem);
     const deadline = Date.now() + 60_000;
     while (!isStartMarker((await markerContents(startedFile)) ?? '')) {
       if (Date.now() > deadline)
