@@ -89,6 +89,7 @@ from switch_core.bridges.resource.service import ResourceService
 from switch_core.chats.service import ChatService
 from switch_core.chats.signals import ChatSignals
 from switch_core.clients.actor import Actor, AgentActor, HumanActor, SystemActor
+from switch_core.clients.admin_messages import AdminMessageType
 from switch_core.clients.agent_admin import AgentAdministration, AgentDeletionRequests
 from switch_core.clients.client_factory import ClientFactory
 from switch_core.clients.client_lifecycle_service import ClientLifecycleService
@@ -169,7 +170,11 @@ from switch_core.db.tenant_lookup import all_tenant_ids
 from switch_core.decision.setup import build_decision_client
 from switch_core.delivery.conversation import ConversationRules, ConversationSettings
 from switch_core.delivery.recipient import RecipientServices
-from switch_core.delivery.router import GROUP_SWEEP_SECONDS, MessageRouter
+from switch_core.delivery.router import (
+    DECISION_SWEEP_SECONDS,
+    GROUP_SWEEP_SECONDS,
+    MessageRouter,
+)
 from switch_core.gateway.app import create_gateway_app
 from switch_core.gateway.auth import hash_password
 from switch_core.gateway.invite_mail import SmtpInviteMailer
@@ -326,6 +331,28 @@ async def _attachment_group_sweep_loop(
                     logger.exception(
                         "Attachment group sweep failed for tenant %s", tenant_id
                     )
+
+
+async def _decision_sweep_loop(
+    session_factory: async_sessionmaker[AsyncSession], router: MessageRouter
+) -> None:
+    """Decide the messages waiting for the decision service in every tenant:
+    the process that wrote one starts at once, and this is what decides one
+    whose process stopped first, or that a restart left behind. Every process
+    runs it; each message is claimed by one."""
+    with no_tenant():
+        while True:
+            await asyncio.sleep(DECISION_SWEEP_SECONDS)
+            try:
+                tenants = await all_tenant_ids(session_factory)
+            except Exception:
+                logger.exception("Decision sweep failed")
+                continue
+            for tenant_id in tenants:
+                try:
+                    await router.decide_pending(tenant_id)
+                except Exception:
+                    logger.exception("Decision sweep failed for tenant %s", tenant_id)
 
 
 async def _recheck_agent_rooms(
@@ -780,7 +807,9 @@ async def run(config: SwitchConfig, process_id: str) -> None:
     trust_client, trust_http = build_trust_client(session_factory, config)
 
     # ── Decision routing (off unless the decision_routing flag is on) ────────
-    decision = build_decision_client(config)
+    # Built either way, so workspace admins can set up and test a backend; only
+    # the router's copy is withheld with the flag off.
+    decision_client = build_decision_client(config, session_factory, telemetry)
 
     # ── Resource service ─────────────────────────────────────────────────────
     resource_service = ResourceService(
@@ -867,7 +896,8 @@ async def run(config: SwitchConfig, process_id: str) -> None:
             agent_store=agent_store,
             room_role_store=room_role_store,
         ),
-        decisions=decision[0] if decision is not None else None,
+        decisions=decision_client if config.decision_routing_enabled else None,
+        decision_max_age_seconds=config.decision_pending_max_age_seconds,
     )
 
     MembershipSignals(invites=invites, bus=signal_bus, router=router)
@@ -933,6 +963,28 @@ async def run(config: SwitchConfig, process_id: str) -> None:
     # Clients registered or deleted in another process are started or stopped
     # here too (`clients/client_signals.py`).
     ClientSignals(lifecycle=client_lifecycle, bus=signal_bus)
+
+    async def post_decision_notice(
+        tenant_id: str, transport_room_id: str, body: str
+    ) -> None:
+        admin = next(
+            (
+                client
+                for client in client_lifecycle.get_by_type("admin", tenant_id)
+                if isinstance(client, SystemActor)
+            ),
+            None,
+        )
+        if admin is None:
+            raise RuntimeError(f"No admin client is running for tenant {tenant_id}")
+        await admin.send_admin(
+            transport_room_id,
+            body,
+            message_type=AdminMessageType.AUTO_ROUTE_UNAVAILABLE,
+            thread_root_id=None,
+        )
+
+    router.use_notices(post_decision_notice)
 
     # ── Collaboration bridge lifecycle ───────────────────────────────────────
     collab_lifecycle = CollaborationBridgeLifecycleService(
@@ -1003,8 +1055,7 @@ async def run(config: SwitchConfig, process_id: str) -> None:
         connections=connections,
         frontend_base_url=config.dashboard_base_url,
         follow_the_conversation_enabled=config.follow_the_conversation_enabled,
-        decision_routing_enabled=config.decision_routing_enabled,
-        decision_endpoint_configured=config.decision_endpoint_url is not None,
+        decision_availability=decision_client.availability,
     )
 
     # ── Agent management (off unless the agent_management flag is on) ─────────
@@ -1338,6 +1389,7 @@ async def run(config: SwitchConfig, process_id: str) -> None:
     )
     agent_bridge_app.state.service_broker = service_broker
     gateway_app.state.service_broker = service_broker
+    gateway_app.state.decision_client = decision_client
     # A connector app the operator saves or removes, put to work in every process.
     ConnectorAppSignals(
         apps=connector_apps,
@@ -1376,6 +1428,11 @@ async def run(config: SwitchConfig, process_id: str) -> None:
             attachment_group_task = asyncio.create_task(
                 _attachment_group_sweep_loop(session_factory, router)
             )
+            decision_task = (
+                asyncio.create_task(_decision_sweep_loop(session_factory, router))
+                if config.decision_routing_enabled
+                else None
+            )
             session_activity_task = asyncio.create_task(
                 session_activity_maintenance_loop(session_factory)
             )
@@ -1409,6 +1466,8 @@ async def run(config: SwitchConfig, process_id: str) -> None:
                 sweep_task.cancel()
                 retention_task.cancel()
                 attachment_group_task.cancel()
+                if decision_task is not None:
+                    decision_task.cancel()
                 router.close()
                 session_activity_task.cancel()
                 connection_sweep_task.cancel()
@@ -1438,8 +1497,7 @@ async def run(config: SwitchConfig, process_id: str) -> None:
                 await protocol.sessions.aclose()
                 await _drain_telemetry(telemetry, message_telemetry, telemetry_http)
                 await trust_http.aclose()
-                if decision is not None:
-                    await decision[1].aclose()
+                await decision_client.aclose()
                 await observability.aclose()
                 # So a probe during teardown gets a 503 rather than the last
                 # cached answer, which may still say ready.

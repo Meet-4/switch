@@ -239,10 +239,14 @@ class MessagePayload(BaseModel):
     # arrived: "owner", "admin" or "member". None for an agent, the platform,
     # or a person no Switch user has claimed.
     sender_role: str | None = None
-    # True when the message tagged nobody and the decision service picked
-    # this agent to answer it (`delivery/decision.py`). Such a message is
-    # always addressed, so every host wakes for it.
+    # True when the message tagged nobody and Switch routed it to this agent
+    # (`delivery/decision.py`). Such a message is always addressed, so every
+    # host wakes for it. `routed_reason` says why: "decided", the decision
+    # service picked this agent; "fallback", the decision service was
+    # unavailable and this agent is the room's triage agent. None when not
+    # routed.
     routed: bool = False
+    routed_reason: Literal["decided", "fallback"] | None = None
 
 
 class CommandPayload(BaseModel):

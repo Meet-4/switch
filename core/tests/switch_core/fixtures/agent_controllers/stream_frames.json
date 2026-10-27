@@ -56,7 +56,8 @@
           "attachments": [],
           "opening_message": null,
           "sender_role": null,
-          "routed": false
+          "routed": false,
+          "routed_reason": null
         },
         "sequence": 1,
         "missed": {
