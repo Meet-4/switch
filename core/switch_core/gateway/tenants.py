@@ -1329,7 +1329,7 @@ async def update_member_role(
         raise HTTPException(status_code=404, detail="Not a member of this tenant")
 
     if membership.role == "admin" and role != "admin":
-        if await user_store.count_admins(session) <= 1:
+        if await user_store.lock_admins(session) <= 1:
             raise HTTPException(status_code=409, detail="Cannot demote the last admin")
 
     if membership.role != role:
@@ -1397,7 +1397,7 @@ async def remove_member(
         raise HTTPException(status_code=404, detail="Not a member of this tenant")
 
     if membership.role == "admin":
-        if await user_store.count_admins(session) <= 1:
+        if await user_store.lock_admins(session) <= 1:
             raise HTTPException(status_code=409, detail="Cannot remove the last admin")
 
     owned_agents = await agent_store.get_by_owner(session, user_id)

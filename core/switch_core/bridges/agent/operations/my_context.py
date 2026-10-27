@@ -59,7 +59,7 @@ async def get_my_context() -> dict[str, Any]:
         `person`: your owner, {name, email, workspace_role, workspace_admin,
         runs_server}. `workspace_role` is "admin" or "member".
         `workspace_admin` is whether they may set up messaging apps and invite
-        people: an owner or admin of the workspace, or the server's own
+        people: an admin of the workspace, or the server's own
         administrator, which `runs_server` marks.
         `workspace`: {id, name, members}.
         `server`: {kind, version, features}. `kind` is "switch_cloud",

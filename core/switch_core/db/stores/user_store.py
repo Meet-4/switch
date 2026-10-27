@@ -439,18 +439,23 @@ class UserStore:
         )
         return [(row[0], row[1]) for row in result.all()]
 
-    async def count_admins(self, session: AsyncSession) -> int:
-        """How many `admin` memberships exist in the session's bound tenant.
+    async def lock_admins(self, session: AsyncSession) -> int:
+        """How many `admin` memberships the session's bound tenant has, with
+        each of those rows locked until the transaction ends.
 
         Backs "a workspace must always have an admin": removing or demoting a
-        member is refused when they are the one row this counts.
+        member is refused when they are the one row this counts. The lock is
+        what makes that hold when two admins act at once: without it, each of
+        two concurrent demotions counts two admins and both commit. With it,
+        the second waits for the first, and its count leaves out the row the
+        first demoted or removed.
         """
-        result = await session.execute(
-            select(func.count())
-            .select_from(TenantMember)
+        result = await session.scalars(
+            select(TenantMember.user_id)
             .where(TenantMember.role == "admin")
+            .with_for_update()
         )
-        return result.scalar_one()
+        return len(result.all())
 
     async def administers(self, session: AsyncSession, user: User) -> bool:
         """Whether `user` may administer the tenant bound to `session`'s

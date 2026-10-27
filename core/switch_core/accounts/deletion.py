@@ -200,7 +200,7 @@ class AccountDeletion:
             if (
                 not alone
                 and workspace.role == "admin"
-                and await self.users.count_admins(session) <= 1
+                and await self.users.lock_admins(session) <= 1
             ):
                 return (
                     f"You're the only admin of {workspace.name}, which has other "
@@ -306,6 +306,7 @@ class AccountDeletion:
             await self._revoke_controllers(tenant_id, user_id, controller_ids)
 
         async with tenant_session(self.session_factory, tenant_id) as session:
+            await self._still_not_the_last_admin(session, user_id, workspace)
             successor = await self._successor(session, user_id)
             try:
                 removed_services = await self.broker.remove_connections(
@@ -361,6 +362,25 @@ class AccountDeletion:
                     tenant_id,
                     warning,
                 )
+
+    async def _still_not_the_last_admin(
+        self, session: AsyncSession, user_id: str, workspace: Workspace
+    ) -> None:
+        """Check `refusal`'s last-admin rule again, in the transaction that
+        removes the membership and with the admin rows locked: another admin
+        may have been demoted or removed since `refusal` read them."""
+        if workspace.role != "admin":
+            return
+        members = await self.users.list_tenant_members(session)
+        if all(member.id == user_id for member, _ in members):
+            return
+        if await self.users.lock_admins(session) <= 1:
+            raise RuntimeError(
+                f"Stopped deleting user {user_id} part-way: they became the only "
+                f"admin of workspace {workspace.id}, which has other members, after "
+                "the deletion was checked. Their agents there are already deleted; "
+                "make another member an admin and delete the account again."
+            )
 
     async def _successor(self, session: AsyncSession, user_id: str) -> str | None:
         """Who takes over what the workspace still needs from this person: an
