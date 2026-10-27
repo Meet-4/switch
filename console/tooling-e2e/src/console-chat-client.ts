@@ -44,6 +44,14 @@ export interface ChatRequest {
   }[];
 }
 
+/** One step of an agent's turn; a `turn` item's status is `queued`/`running` while it is live. */
+export interface ChatActivityItem {
+  agentId: string;
+  turnId: string;
+  kind: string;
+  status: string;
+}
+
 export type ChatRequestAnswer =
   | { answer: string }
   | {
@@ -137,13 +145,13 @@ export class ConsoleChatClient {
     return body.commandId;
   }
 
-  /** `GET /gateway/chats/{room}/activity` — the room's requests, in every state. */
+  /** `GET /gateway/chats/{room}/activity` — the room's turn steps and requests, in every state. */
+  async activity(roomId: string): Promise<{ items: ChatActivityItem[]; approvals: ChatRequest[] }> {
+    return this.request('GET', `/chats/${encodeURIComponent(roomId)}/activity`);
+  }
+
   async requests(roomId: string): Promise<ChatRequest[]> {
-    const activity = await this.request<{ approvals: ChatRequest[] }>(
-      'GET',
-      `/chats/${encodeURIComponent(roomId)}/activity`
-    );
-    return activity.approvals;
+    return (await this.activity(roomId)).approvals;
   }
 
   /** `POST /gateway/agent-sessions/{agent}/{session}/approvals/{request}/answer` — the card's Submit. */
@@ -154,11 +162,15 @@ export class ConsoleChatClient {
     await this.request('POST', `/agent-sessions/${path}/answer`, answer);
   }
 
-  /** Wait for an open request of `kind` from `agentId` in the room, or null at the deadline. */
+  /**
+   * Wait for an open request of `kind` from `agentId` in the room whose id is
+   * not in `known` (the ids present before the scenario asked), or null at the deadline.
+   */
   async waitForOpenRequest(params: {
     roomId: string;
     agentId: string;
     kind: ChatRequest['kind'];
+    known: Set<string>;
     deadlineMs: number;
   }): Promise<ChatRequest | null> {
     const until = Date.now() + params.deadlineMs;
@@ -166,6 +178,7 @@ export class ConsoleChatClient {
       const match = (await this.requests(params.roomId)).find(
         (request) =>
           request.state === 'open' &&
+          !params.known.has(request.requestId) &&
           request.agentId === params.agentId &&
           request.kind === params.kind
       );

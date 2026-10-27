@@ -109,9 +109,11 @@ export const OK_MARKER = 'SWITCH_E2E_OK';
 async function scenario(
   harness: Harness,
   name: string,
-  body: (record: (posts: ChatMessage[]) => void) => Promise<string>
+  body: (record: (posts: ChatMessage[]) => void, known: Set<string>) => Promise<string>
 ): Promise<ScenarioResult> {
   const started = Date.now();
+  // Request ids already in the room, so this scenario only ever answers its own cards.
+  let known = new Set<string>();
   let transcript: ChatMessage[] = [];
   const record = (posts: ChatMessage[]): void => {
     const seen = new Set(transcript.map((post) => post.messageId));
@@ -121,13 +123,15 @@ async function scenario(
   };
 
   try {
-    const details = await body(record);
+    known = new Set((await harness.chat.requests(harness.room.id)).map((r) => r.requestId));
+    const details = await body(record, known);
     return { name, ok: true, details, transcript, durationMs: Date.now() - started };
   } catch (error) {
     let details = error instanceof Error ? error.message : String(error);
     // Stop the turn so an unanswered card or a stuck command cannot block the next scenario.
     await harness.chat
       .control(harness.room.id, harness.agent.id, 'interrupt')
+      .then(() => settle(harness, known))
       .catch((stopError: unknown) => {
         details += ` (and Stop failed: ${stopError instanceof Error ? stopError.message : String(stopError)})`;
       });
@@ -138,6 +142,39 @@ async function scenario(
       transcript,
       durationMs: Date.now() - started,
     };
+  }
+}
+
+const SETTLE_DEADLINE_MS = 60_000;
+
+/**
+ * Stop only confirms the command was accepted. Wait until the agent has no
+ * queued/running turn and none of this scenario's requests is still open.
+ */
+async function settle(harness: Harness, known: Set<string>): Promise<void> {
+  const deadline = Date.now() + SETTLE_DEADLINE_MS;
+  for (;;) {
+    const { items, approvals } = await harness.chat.activity(harness.room.id);
+    const running = items.filter(
+      (item) =>
+        item.agentId === harness.agent.id &&
+        item.kind === 'turn' &&
+        (item.status === 'queued' || item.status === 'running')
+    );
+    const open = approvals.filter(
+      (request) =>
+        request.agentId === harness.agent.id &&
+        request.state === 'open' &&
+        !known.has(request.requestId)
+    );
+    if (running.length === 0 && open.length === 0) return;
+    if (Date.now() >= deadline)
+      throw new Error(
+        `agent did not settle ${SETTLE_DEADLINE_MS / 1000}s after Stop: ` +
+          `running turns [${running.map((item) => item.turnId).join(', ')}], ` +
+          `open requests [${open.map((request) => request.requestId).join(', ')}]`
+      );
+    await sleep(2_000);
   }
 }
 
@@ -188,6 +225,7 @@ async function expectRequest(
   params: {
     since: number;
     kind: ChatRequest['kind'];
+    known: Set<string>;
     describe: string;
     record: (posts: ChatMessage[]) => void;
   }
@@ -196,6 +234,7 @@ async function expectRequest(
     roomId: harness.room.id,
     agentId: harness.agent.id,
     kind: params.kind,
+    known: params.known,
     deadlineMs: REPLY_DEADLINE_MS,
   });
   if (request) return request;
@@ -266,7 +305,7 @@ const CHOSEN = 'green';
  * arrives, which is the thing an injected-prompt runtime most easily gets wrong.
  */
 export const question: Scenario = (harness) =>
-  scenario(harness, 'question', async (record) => {
+  scenario(harness, 'question', async (record, known) => {
     const prose = harness.env.questionMode === 'prose';
     const since = await ask(
       harness,
@@ -297,6 +336,7 @@ export const question: Scenario = (harness) =>
       const request = await expectRequest(harness, {
         since,
         kind: 'questions',
+        known,
         describe: `a question card offering ${CHOICES.join('/')}`,
         record,
       });
@@ -341,7 +381,7 @@ export const question: Scenario = (harness) =>
  * is the scenario most tightly coupled to that runtime.
  */
 export const approval: Scenario = (harness) =>
-  scenario(harness, 'approval', async (record) => {
+  scenario(harness, 'approval', async (record, known) => {
     const file = `approved-${harness.runId}.txt`;
     const since = await ask(
       harness,
@@ -351,6 +391,7 @@ export const approval: Scenario = (harness) =>
     const prompt = await expectRequest(harness, {
       since,
       kind: 'approval',
+      known,
       describe: 'a permission card for the shell command',
       record,
     });
@@ -363,7 +404,16 @@ export const approval: Scenario = (harness) =>
       describe: "a 'done' reply after the command was approved",
     });
 
-    return `prompted in card ${prompt.requestId}, completed in ${done.messageId}`;
+    // Without SWITCH_E2E_AGENT_DIR the agent's working directory is unknown here, so the file cannot be checked.
+    const dir = harness.env.agentRepoDir;
+    if (!dir)
+      return `prompted in card ${prompt.requestId}, completed in ${done.messageId} (file not checked: no SWITCH_E2E_AGENT_DIR)`;
+    const written = await markerContents(path.join(dir, file));
+    if (written?.trim() !== OK_MARKER)
+      throw new Error(
+        `The approved command did not write ${OK_MARKER} to ${file}: ${JSON.stringify(written)}`
+      );
+    return `prompted in card ${prompt.requestId}, completed in ${done.messageId}, ${file} written`;
   });
 
 // ── interrupt ────────────────────────────────────────────────────────────────
@@ -384,7 +434,7 @@ async function markerContents(file: string): Promise<string | null> {
 
 /** A real local command must start and then be cancelled before its final write. */
 export const interrupt: Scenario = (harness) =>
-  scenario(harness, 'interrupt', async (record) => {
+  scenario(harness, 'interrupt', async (record, known) => {
     const dir = harness.env.agentRepoDir;
     if (!dir)
       throw new Error('The interrupt scenario requires SWITCH_E2E_AGENT_DIR on this machine.');
@@ -399,6 +449,7 @@ export const interrupt: Scenario = (harness) =>
     const prompt = await expectRequest(harness, {
       since,
       kind: 'approval',
+      known,
       describe: 'permission to run the cancellation command',
       record,
     });
@@ -423,6 +474,7 @@ export const interrupt: Scenario = (harness) =>
     assertNotNoSession(posts);
     if ((await markerContents(finishedFile)) !== null)
       throw new Error('The interrupted command completed.');
+    await settle(harness, known);
     return 'command start confirmed; completion marker absent after 95s';
   });
 
