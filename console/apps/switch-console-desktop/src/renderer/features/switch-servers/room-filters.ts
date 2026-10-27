@@ -1,4 +1,5 @@
 import type { ChatSummary } from '@shared/core/chats/chats';
+import type { FeatureFlags } from '@shared/core/feature-flags/feature-flags';
 import type { RemoteRoomSummary } from '@shared/core/switch-servers/switch-servers';
 
 /**
@@ -19,6 +20,17 @@ export function isConsoleDirectChatSummary(
   chat: Pick<ChatSummary, 'channelType' | 'bridgeType' | 'agents'>
 ): boolean {
   return isConsoleDirectChat({ ...chat, agentCount: chat.agents.length });
+}
+
+/**
+ * Whether the room lists leave 1-1 Console chats out. They are listed on their
+ * agent's managed page, which exists only under agent management; without it
+ * the room lists are the only place to find them again.
+ */
+export function hidesConsoleDirectChats(
+  flags: Pick<FeatureFlags, 'agent_chats' | 'agent_management'>
+): boolean {
+  return flags.agent_chats && flags.agent_management;
 }
 
 /** A Console group chat: an unbridged chat that is not a 1-1 Console chat. It opens as a room. */
