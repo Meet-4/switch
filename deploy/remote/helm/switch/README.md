@@ -160,6 +160,14 @@ kubectl delete pvc <release>-mattermost-data
 kubectl exec <release>-postgresql-0 -- psql -U postgres -c 'DROP DATABASE mattermost;'   # managed mode; on an external DB, drop it there
 ```
 
+Console chat replaces Mattermost, so `switchCore.featureFlags.enabled` now
+defaults to `[agent_chats, group_chats]`. If the running release predates
+group chats and has more than one switch-core replica, upgrade in two steps:
+first upgrade with `featureFlags.enabled` set explicitly without
+`group_chats`, and add it once every replica runs the new release. An old
+replica ignores the group-chat fields, so a request it serves can silently
+leave out people or agents.
+
 `switchCore.collaborationCallback` and `secrets.mattermostAdminPassword` /
 `mattermostUserPassword` are gone; remove them from your values. A
 `secrets.existingSecret` may drop its `MATTERMOST_*` keys.
