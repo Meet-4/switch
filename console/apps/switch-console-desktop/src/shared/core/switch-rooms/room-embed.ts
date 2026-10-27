@@ -21,7 +21,8 @@ export function resolveRoomEmbed(
   if (!bridgeType) {
     return {
       kind: 'unavailable',
-      reason: 'This room has no chat channel — it was created as an agent-only room.',
+      reason:
+        "This chat can't be opened here: you may not be a member of it, or chats are turned off on this server.",
     };
   }
   if (externalChannelUrl)

@@ -584,9 +584,9 @@ You can also author a document scoped to the room:
 
 ### Bridged or in-Console rooms — let the user pick
 
-People read every room in Switch Console, so a room needs no bridge to be
-readable by humans. A bridge adds an external channel on Slack, Discord,
-Telegram or Teams. Omitting `bridge_id` uses the instance's default bridge if
+People read a room with no bridge (an in-Console room) in Switch Console,
+when they are members of it. A bridged room is read on its platform instead
+(Slack, Discord, Telegram or Teams); Switch Console links out to it. Omitting `bridge_id` uses the instance's default bridge if
 one is set; with none, the room is an in-Console room. Pass
 `internal_only=True` to skip the default bridge.
 
