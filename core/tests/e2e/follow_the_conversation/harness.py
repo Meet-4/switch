@@ -65,7 +65,12 @@ def load_state() -> dict:
 
 async def sign_in(email: str, password: str) -> aiohttp.ClientSession:
     """A session signed in to the gateway; its cookie jar carries the login."""
-    http = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True))
+    # A fresh connection per request: the steps pause 5 s, uvicorn's keep-alive
+    # timeout, so a pooled connection is reset as it is reused.
+    http = aiohttp.ClientSession(
+        cookie_jar=aiohttp.CookieJar(unsafe=True),
+        connector=aiohttp.TCPConnector(force_close=True),
+    )
     await gw(http, "POST", "/auth/login", {"email": email, "password": password})
     return http
 
@@ -104,6 +109,21 @@ async def chat_messages(http: aiohttp.ClientSession, room_id: str) -> list[dict]
     return (await gw(http, "GET", f"/chats/{room_id}/messages?limit=200"))["messages"]
 
 
+# An agent may not change its own settings, and these agents have no owner to
+# act for, so the admin sets who may address them.
+OWNER_ONLY = {
+    "rules": [
+        {"rooms": "*", "room_groups": "*", "users": [], "agents": [], "owner": True}
+    ]
+}
+
+
+async def set_addressing(
+    admin: aiohttp.ClientSession, agent_id: str, policy: dict | None
+) -> None:
+    await gw(admin, "PUT", f"/agents/{agent_id}/addressing-policy", {"policy": policy})
+
+
 async def open_chats(
     http: aiohttp.ClientSession,
     helper: dict,
@@ -114,12 +134,7 @@ async def open_chats(
     """Open a group chat per room. A chat can only be opened with agents the
     opener may address, so private-bot is open to anyone while they are made."""
     private_bot = state["agents"]["private-bot"]["id"]
-    await op(
-        http,
-        helper,
-        "update_agent_detail",
-        {"agent_id": private_bot, "addressing": "anyone"},
-    )
+    await set_addressing(http, private_bot, None)
     for key, members in rooms.items():
         created = await gw(
             http,
@@ -134,12 +149,7 @@ async def open_chats(
             },
         )
         state["rooms"][key] = {"id": created["chat"]["roomId"]}
-    await op(
-        http,
-        helper,
-        "update_agent_detail",
-        {"agent_id": private_bot, "addressing": "owner_only"},
-    )
+    await set_addressing(http, private_bot, OWNER_ONLY)
 
 
 # ── Switch agent protocol ───────────────────────────────────────────────────
@@ -191,16 +201,11 @@ async def setup() -> None:
                     raise RuntimeError(f"register {name}: {r.status} {body}")
                 state["agents"][name] = {"id": body["id"], "api_key": body["api_key"]}
         helper = state["agents"]["helper"]
-        for name in ("helper", "reviewer"):
-            await op(
-                http,
-                helper,
-                "update_agent_detail",
-                {"agent_id": state["agents"][name]["id"], "addressing": "anyone"},
-            )
 
     admin = await sign_in(e["GATEWAY_ADMIN_EMAIL"], e["GATEWAY_ADMIN_PASSWORD"])
     try:
+        for name in ("helper", "reviewer"):
+            await set_addressing(admin, state["agents"][name]["id"], None)
         state["tenant_id"] = (await gw(admin, "GET", "/tenants/current"))["id"]
         previous = json.loads(STATE.read_text()) if STATE.exists() else {}
         bob_password = previous.get("bob_password") or "Bob-" + uuid.uuid4().hex[:12]
@@ -366,7 +371,16 @@ async def reply(
 
 async def agents() -> None:
     state = load_state()
-    await asyncio.gather(*(run_agent(n, a) for n, a in state["agents"].items()))
+
+    async def staggered(delay: int, name: str, agent: dict) -> None:
+        # shortcut: agents connecting at the same instant can get a 500 ("No
+        # incarnation drawn"), a server race; drop the stagger once it is fixed.
+        await asyncio.sleep(delay)
+        await run_agent(name, agent)
+
+    await asyncio.gather(
+        *(staggered(i, n, a) for i, (n, a) in enumerate(state["agents"].items()))
+    )
 
 
 # ── Scenarios ───────────────────────────────────────────────────────────────
