@@ -1,5 +1,5 @@
-"""Changing a reference's, reference type's or package's visibility is its
-owner's or a workspace admin's; editing anything else needs only write access.
+"""Changing a reference's, reference type's, package's or library document's
+visibility is its owner's or a workspace admin's; editing anything else needs only write access.
 
 Through `ResourceService`, which both the gateway routes and the agent
 operations call, against a real database.
@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from switch_core.bridges.resource.service import ResourceService
-from switch_core.db.models import Package, Reference, ReferenceType
+from switch_core.db.models import Document, Package, Reference, ReferenceType
 from switch_core.db.stores.document_store import DocumentStore
 from switch_core.db.stores.package_store import PackageStore
 from switch_core.db.stores.reference_store import ReferenceStore
@@ -39,7 +39,9 @@ def service(session_factory: async_sessionmaker[AsyncSession]) -> ResourceServic
 OPEN = {"read_visibility": "public", "write_visibility": "public"}
 
 
-async def _open_resources(session: AsyncSession, owner_id: str) -> tuple[str, str, str]:
+async def _open_resources(
+    session: AsyncSession, owner_id: str
+) -> tuple[str, str, str, str]:
     reference = Reference(
         owner_id=owner_id,
         type="url",
@@ -60,9 +62,18 @@ async def _open_resources(session: AsyncSession, owner_id: str) -> tuple[str, st
         value_hint="",
         **OPEN,
     )
-    session.add_all([reference, package, reference_type])
+    document = Document(
+        owner_id=owner_id,
+        room_id=None,
+        name="notes",
+        description="",
+        instructions="",
+        content="",
+        **OPEN,
+    )
+    session.add_all([reference, package, reference_type, document])
     await session.flush()
-    return reference.id, package.id, reference_type.type
+    return reference.id, package.id, reference_type.type, document.id
 
 
 async def test_a_writer_edits_the_description_but_not_the_visibility(
@@ -71,7 +82,9 @@ async def test_a_writer_edits_the_description_but_not_the_visibility(
     async with session_factory() as session:
         owner = await _make_user(session, "owner")
         writer = await _make_user(session, "writer")
-        reference_id, package_id, slug = await _open_resources(session, owner.id)
+        reference_id, package_id, slug, document_id = await _open_resources(
+            session, owner.id
+        )
         await session.commit()
 
         await service.update_reference(
@@ -82,6 +95,9 @@ async def test_a_writer_edits_the_description_but_not_the_visibility(
         )
         await service.update_reference_type(
             session, slug, user_id=writer.id, is_admin=False, instructions="x"
+        )
+        await service.update_document(
+            session, document_id, user_id=writer.id, is_admin=False, content="x"
         )
         with pytest.raises(PermissionError, match="reference's owner"):
             await service.update_reference(
@@ -108,6 +124,14 @@ async def test_a_writer_edits_the_description_but_not_the_visibility(
                 is_admin=False,
                 write_visibility="private",
             )
+        with pytest.raises(PermissionError, match="document's owner"):
+            await service.update_document(
+                session,
+                document_id,
+                user_id=writer.id,
+                is_admin=False,
+                read_visibility="private",
+            )
 
 
 @pytest.mark.parametrize("as_admin", [False, True])
@@ -119,7 +143,9 @@ async def test_the_owner_and_an_admin_change_the_visibility(
     async with session_factory() as session:
         owner = await _make_user(session, "owner")
         admin = await _make_user(session, "admin")
-        reference_id, package_id, slug = await _open_resources(session, owner.id)
+        reference_id, package_id, slug, document_id = await _open_resources(
+            session, owner.id
+        )
         await session.commit()
         actor = admin.id if as_admin else owner.id
         private = {"read_visibility": "private", "write_visibility": "private"}
@@ -133,7 +159,10 @@ async def test_the_owner_and_an_admin_change_the_visibility(
         reference_type = await service.update_reference_type(
             session, slug, user_id=actor, is_admin=as_admin, **private
         )
-    for row in (reference, package, reference_type):
+        document = await service.update_document(
+            session, document_id, user_id=actor, is_admin=as_admin, **private
+        )
+    for row in (reference, package, reference_type, document):
         assert (row.read_visibility, row.write_visibility) == ("private", "private")
 
 
@@ -147,13 +176,16 @@ async def test_a_writer_racing_the_owner_is_checked_against_the_committed_row(
     async with session_factory() as session:
         owner = await _make_user(session, "owner")
         writer = await _make_user(session, "writer")
-        reference_id, package_id, slug = await _open_resources(session, owner.id)
+        reference_id, package_id, slug, document_id = await _open_resources(
+            session, owner.id
+        )
         await session.commit()
     private = {"read_visibility": "private", "write_visibility": "private"}
     updates = {
         "reference": (service.update_reference, reference_id, {"description": "x"}),
         "package": (service.update_package, package_id, {"description": "x"}),
         "reference type": (service.update_reference_type, slug, {"instructions": "x"}),
+        "document": (service.update_document, document_id, {"instructions": "x"}),
     }
 
     for label, (update, key, edit) in updates.items():
@@ -186,6 +218,7 @@ async def test_a_writer_racing_the_owner_is_checked_against_the_committed_row(
             await ReferenceStore().get(session, reference_id),
             await PackageStore().get(session, package_id),
             await ReferenceTypeStore().get(session, slug),
+            await DocumentStore().get(session, document_id),
         ]
     for row in rows:
         assert row is not None

@@ -908,10 +908,17 @@ class ResourceService:
         write_visibility: str | None = None,
         content: str | None = None,
     ) -> Document:
-        doc = await self._documents.get(session, document_id)
+        doc = await self._documents.get_for_update(session, document_id)
         if doc is None:
             raise ValueError(f"Document not found: {document_id}")
         require(Principal(user_id, is_admin), "write", doc)
+        require_visibility_change(
+            Principal(user_id, is_admin),
+            doc,
+            read_visibility,
+            write_visibility,
+            "document",
+        )
         validate_visibility_pair(
             read_visibility if read_visibility is not None else doc.read_visibility,
             write_visibility if write_visibility is not None else doc.write_visibility,
