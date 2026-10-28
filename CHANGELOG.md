@@ -85,6 +85,17 @@ version of their own to them without also giving them a release of their own.
   Now a room the runner cannot read reads as missing.
 
 #### Added
+- **A reconnect storm is paced instead of taking the pool.** When a pod goes
+  away, every agent and controller it held opens a connection on the pods
+  left within seconds. On staging (two pods, 1,000 agents, one pod deleted)
+  those opens took the whole database pool: requests and the process lease
+  timed out with them, and the surviving pod dropped agents of its own. Each
+  process now opens at most `AGENT_OPEN_LIMIT` (8) agent and controller
+  connections at once. An open that finds no slot within 2 s is refused
+  before authentication with 503 and `retry_after_s`: a time handed out in
+  order, one slot after another, so the storm comes back as a queue spread
+  over what the process can take. A caller that comes back early keeps its
+  time. `switch.agent.opens_deferred` counts the refusals, by route.
 - **The `[CONN]` log lines say when a client fell back to the event stream.**
   `/events` takes optional `fallback` and `fallback_close_code` parameters,
   and the `[CONN] opened` and `[CONN] reattached` lines end with
