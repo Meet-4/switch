@@ -15,11 +15,9 @@ import {
   bulkArchiveRooms,
   unarchiveRoom,
 } from "../../data/api";
-import { useAuth } from "../../data/AuthContext";
 import { useRoomGroups, useRooms } from "../../data/hooks";
 import { EM_DASH, MONO_SX, channelTypeLabel, formatDate } from "../../theme/hootFormat";
 import { buildGroupIndex, effectiveColor, groupPathName } from "./groupTree";
-import { canWriteRoom } from "./roomAccess";
 import { RoomFilters, filterRooms, useRoomFilterState } from "./roomFilters";
 
 function Missing() {
@@ -53,7 +51,6 @@ export default function RoomsPage() {
     severity: "error" | "warning";
     text: string;
   } | null>(null);
-  const { user, canAdminTenant } = useAuth();
 
   const { data: rooms, loading, refetch } = useRooms(
     filters.debouncedSearch || undefined,
@@ -79,12 +76,9 @@ export default function RoomsPage() {
     ],
   );
 
-  // Archiving is a write: the owner, an admin, or anyone in a publicly
-  // writable room. Other rooms get no archive action and can't be selected.
-  const canWrite = useCallback(
-    (room: RoomSummary) => canWriteRoom(room, user?.id, canAdminTenant),
-    [user, canAdminTenant],
-  );
+  // Archiving is a write, as the server reports it for each room. Other rooms
+  // get no archive action and can't be selected.
+  const canWrite = useCallback((room: RoomSummary) => room.can_write, []);
 
   const handleToggleArchive = useCallback(
     async (roomId: string, archived: boolean) => {

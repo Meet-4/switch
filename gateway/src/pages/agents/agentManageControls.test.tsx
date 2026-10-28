@@ -5,8 +5,9 @@ import { useAuth } from "../../data/AuthContext";
 import * as hooks from "../../data/hooks";
 import AgentDetailPage from "./AgentDetailPage";
 
-// The server lets an agent's owner or an admin rename it and edit its options,
-// so both see those controls; anyone else sees neither.
+// The server says whether the caller may manage the agent (its owner or an
+// admin): those who may see the rename and options controls, anyone else sees
+// neither.
 
 vi.mock("react-router", () => ({
   useNavigate: () => vi.fn(),
@@ -47,13 +48,12 @@ const agent = {
   children: [],
 } as unknown as AgentDetail;
 
-function showPageAs(userId: string, canAdminTenant: boolean) {
+function showPageAs(userId: string, canManage: boolean) {
   vi.mocked(useAuth).mockReturnValue({
     user: { id: userId },
-    canAdminTenant,
   } as unknown as ReturnType<typeof useAuth>);
   vi.mocked(hooks.useAgent).mockReturnValue({
-    data: agent,
+    data: { ...agent, can_manage: canManage },
     loading: false,
     error: null,
     refetch: vi.fn(),
@@ -77,7 +77,7 @@ function showPageAs(userId: string, canAdminTenant: boolean) {
 afterEach(cleanup);
 
 describe("agent rename and options", () => {
-  it("are offered to an admin viewing someone else's agent", () => {
+  it("are offered to someone else the server says may manage it, such as an admin", () => {
     showPageAs("u2", true);
 
     expect(screen.getByRole("button", { name: "Rename agent" })).toBeTruthy();
@@ -86,7 +86,7 @@ describe("agent rename and options", () => {
   });
 
   it("are offered to the owner", () => {
-    showPageAs("u1", false);
+    showPageAs("u1", true);
 
     expect(screen.getByRole("button", { name: "Rename agent" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();

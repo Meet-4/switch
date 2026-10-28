@@ -78,7 +78,7 @@ function StatusDot({ color, title }: { color: string; title?: string }) {
 export default function AgentDetailPage() {
   const { agentId } = useParams<{ agentId: string }>();
   const navigate = useNavigate();
-  const { user, canAdminTenant } = useAuth();
+  const { user } = useAuth();
   const { data: agent, loading, error, refetch } = useAgent(agentId);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameNotice, setRenameNotice] = useState<{
@@ -108,10 +108,11 @@ export default function AgentDetailPage() {
   }
 
   const isOwner = !!user && user.id === agent.owner_id;
-  // Renaming and editing options are open to the owner or an admin; agent
-  // management and service access stay with the owner alone, because the
-  // agent then acts on the owner's own machines and credentials.
-  const canManage = isOwner || canAdminTenant;
+  // Renaming and editing options are open to whoever the server says may
+  // manage the agent (its owner or an admin); agent management and service
+  // access stay with the owner alone, because the agent then acts on the
+  // owner's own machines and credentials.
+  const canManage = agent.can_manage;
 
   return (
     <Box>

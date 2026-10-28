@@ -48,7 +48,6 @@ import {
   updateRoomRole,
 } from "../../data/api";
 import { useAgents, useBridgeUsers, useRoom, useRoomGroups } from "../../data/hooks";
-import { useAuth } from "../../data/AuthContext";
 import { AccessChip, AccessSelect } from "../../components/AccessControls";
 import { type AccessLevel, fromAccessLevel, toAccessLevel } from "../../data/visibility";
 import {
@@ -67,7 +66,6 @@ import ExportRoomYamlDialog from "./ExportRoomYamlDialog";
 export default function RoomDetailPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
-  const { user, canAdminTenant } = useAuth();
   const { data: room, loading, error, refetch } = useRoom(roomId);
   const [exportOpen, setExportOpen] = useState(false);
 
@@ -92,16 +90,11 @@ export default function RoomDetailPage() {
     );
   }
 
-  // Room write access: owner, admin, or a publicly-writable room.
-  const canWrite =
-    !!user &&
-    (user.id === room.owner_id ||
-      canAdminTenant ||
-      room.write_visibility === "public");
-  // Delete and access changes are stricter: owner or admin only, never via
-  // public write (the server's `require_manage` / `delete` checks).
-  const canManage =
-    !!user && (user.id === room.owner_id || canAdminTenant);
+  // The server says what the caller may do: write covers the room's fields,
+  // agents, people and resources; deleting it and changing its access need
+  // manage, which public write never gives.
+  const canWrite = room.can_write;
+  const canManage = room.can_manage;
   const canDelete = canManage;
 
   return (

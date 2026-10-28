@@ -1,22 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GridColDef, GridRowId, GridRowParams } from "@mui/x-data-grid";
 import { useState } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RoomSummary } from "../../data/api";
 import * as api from "../../data/api";
-import { useAuth } from "../../data/AuthContext";
 import RoomsPage from "./RoomsPage";
 
-// Archiving a room is a write: its owner, an admin, or anyone in a publicly
-// writable room. The page offers it only there, and says when the server
-// changed fewer rooms than were asked for.
+// Archiving a room is a write. The page offers it only on rooms the server says
+// the caller may write to, and says when the server changed fewer rooms than
+// were asked for.
 
 vi.mock("react-router", () => ({
   useNavigate: () => vi.fn(),
-}));
-
-vi.mock("../../data/AuthContext", () => ({
-  useAuth: vi.fn(),
 }));
 
 const room = (id: string, overrides: Partial<RoomSummary>) =>
@@ -38,12 +33,14 @@ const room = (id: string, overrides: Partial<RoomSummary>) =>
     write_visibility: "private",
     created_at: "2026-10-01T00:00:00Z",
     archived: false,
+    can_write: false,
+    can_manage: false,
     ...overrides,
   }) as RoomSummary;
 
 const ROOMS = [
-  room("mine", { owner_id: "u1" }),
-  room("open", { write_visibility: "public" }),
+  room("mine", { owner_id: "u1", can_write: true, can_manage: true }),
+  room("open", { write_visibility: "public", can_write: true }),
   room("readonly", {}),
 ];
 
@@ -103,20 +100,13 @@ vi.mock("../../components/DataTable", () => ({
   },
 }));
 
-beforeEach(() => {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: "u1" },
-    canAdminTenant: false,
-  } as unknown as ReturnType<typeof useAuth>);
-});
-
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
 describe("RoomsPage archive", () => {
-  it("offers archive only on rooms the user can write", () => {
+  it("offers archive only on rooms the server says the user can write", () => {
     render(<RoomsPage />);
 
     for (const name of ["mine", "open"]) {
@@ -127,16 +117,6 @@ describe("RoomsPage archive", () => {
     const readonly = screen.getByTestId("row-readonly");
     expect(within(readonly).queryByRole("button", { name: "Archive" })).toBeNull();
     expect(within(readonly).queryByRole("checkbox")).toBeNull();
-  });
-
-  it("offers archive on every room to an admin", () => {
-    vi.mocked(useAuth).mockReturnValue({
-      user: { id: "u1" },
-      canAdminTenant: true,
-    } as unknown as ReturnType<typeof useAuth>);
-    render(<RoomsPage />);
-
-    expect(screen.getAllByRole("button", { name: "Archive" })).toHaveLength(3);
   });
 
   it("says when a bulk archive changed only some rooms", async () => {

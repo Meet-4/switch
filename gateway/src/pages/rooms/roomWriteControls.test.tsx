@@ -1,20 +1,15 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAuth } from "../../data/AuthContext";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import RoomLinkedRoomsSection from "./RoomLinkedRoomsSection";
 import RoomResourcesSection from "./RoomResourcesSection";
 
 // The room's linked rooms and resources change only for someone with write
 // access to the room, so their controls show only to them. A linked room or
-// package opens only for someone who may read it.
+// package opens only for someone the server says may read it.
 
 const navigate = vi.fn();
 vi.mock("react-router", () => ({
   useNavigate: () => navigate,
-}));
-
-vi.mock("../../data/AuthContext", () => ({
-  useAuth: vi.fn(),
 }));
 
 const result = <T,>(data: T) => ({
@@ -68,6 +63,7 @@ vi.mock("../../data/hooks", () => ({
         description: "",
         owner_id: "someone",
         read_visibility: "public",
+        can_read: true,
       },
       {
         id: "pkg2",
@@ -75,6 +71,7 @@ vi.mock("../../data/hooks", () => ({
         description: "",
         owner_id: "someone",
         read_visibility: "private",
+        can_read: false,
       },
       {
         id: "pkg3",
@@ -82,17 +79,11 @@ vi.mock("../../data/hooks", () => ({
         description: "",
         owner_id: "u1",
         read_visibility: "private",
+        can_read: true,
       },
     ]),
   usePackages: () => result([]),
 }));
-
-beforeEach(() => {
-  vi.mocked(useAuth).mockReturnValue({
-    user: { id: "u1" },
-    canAdminTenant: false,
-  } as unknown as ReturnType<typeof useAuth>);
-});
 
 afterEach(() => {
   cleanup();
@@ -157,14 +148,4 @@ describe("linked rooms and attached packages", () => {
     expect(screen.getByText("secret-kit")).toBeTruthy();
   });
 
-  it("all open for an admin", () => {
-    vi.mocked(useAuth).mockReturnValue({
-      user: { id: "u2" },
-      canAdminTenant: true,
-    } as unknown as ReturnType<typeof useAuth>);
-    renderSections(false);
-
-    fireEvent.click(screen.getByTestId("room-package-pkg2"));
-    expect(navigate).toHaveBeenLastCalledWith("/resources/packages/pkg2");
-  });
 });

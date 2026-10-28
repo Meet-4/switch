@@ -22,7 +22,6 @@ import {
   detachPackageFromRoom,
   detachReferenceFromRoom,
 } from "../../data/api";
-import { useAuth } from "../../data/AuthContext";
 import {
   useDocuments,
   usePackages,
@@ -31,7 +30,6 @@ import {
   useRoomPackages,
   useRoomReferences,
 } from "../../data/hooks";
-import { canReadResource } from "./roomAccess";
 
 interface Props {
   roomId: string;
@@ -50,16 +48,11 @@ export default function RoomResourcesSection({ roomId, canWrite }: Props) {
     return m;
   }, [roomPackages]);
   // A private package attached by its owner is listed to every reader of the
-  // room, but only those who may read it get a link to it.
-  const { user, canAdminTenant } = useAuth();
+  // room, but only those the server says may read it get a link to it.
   const readablePackageIds = useMemo(
     () =>
-      new Set(
-        (roomPackages ?? [])
-          .filter((p) => canReadResource(p, user?.id, canAdminTenant))
-          .map((p) => p.id),
-      ),
-    [roomPackages, user, canAdminTenant],
+      new Set((roomPackages ?? []).filter((p) => p.can_read).map((p) => p.id)),
+    [roomPackages],
   );
 
   return (

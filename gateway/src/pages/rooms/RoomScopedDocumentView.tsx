@@ -15,9 +15,7 @@ import {
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { detachDocumentFromRoom } from "../../data/api";
-import { useAuth } from "../../data/AuthContext";
 import { useRoom, useRoomDocument } from "../../data/hooks";
-import { canWriteRoom } from "./roomAccess";
 
 export default function RoomScopedDocumentView() {
   const { roomId, documentId } = useParams<{
@@ -29,8 +27,7 @@ export default function RoomScopedDocumentView() {
   // Deleting a room document (or detaching a shared one) is a write to the
   // room, so it is offered only to those who may write to it.
   const { data: room } = useRoom(roomId);
-  const { user, canAdminTenant } = useAuth();
-  const canWrite = !!room && canWriteRoom(room, user?.id, canAdminTenant);
+  const canWrite = !!room && room.can_write;
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
