@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from switch_core.db.session_scope import shared_tenant_session, tenant_session
 from switch_core.tenant_context import current_tenant_id, tenant_scope
+from tests.session_counting import CountingSessionFactory
 
 TENANT_A = "tenant-session-scope-a"
 TENANT_B = "tenant-session-scope-b"
@@ -91,23 +92,11 @@ class TestTenantSession:
             await session.commit()
 
 
-class _CountingFactory:
-    """The real factory, counting the sessions opened through it."""
-
-    def __init__(self, inner: async_sessionmaker[AsyncSession]) -> None:
-        self._inner = inner
-        self.opened = 0
-
-    def __call__(self) -> Any:
-        self.opened += 1
-        return self._inner()
-
-
 class TestSharedTenantSession:
     async def test_a_session_opened_inside_the_block_is_the_shared_session(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
-        counting: Any = _CountingFactory(session_factory)
+        counting: Any = CountingSessionFactory(session_factory)
         async with shared_tenant_session(counting, TENANT_A) as shared:
             async with tenant_session(counting, TENANT_A) as first:
                 assert await _current_setting(first) == TENANT_A
@@ -180,3 +169,29 @@ class TestSharedTenantSession:
         assert current_tenant_id() is None
         async with tenant_session(session_factory, TENANT_A) as session:
             assert await _current_setting(session) == TENANT_A
+
+    async def test_a_block_inside_another_for_the_same_tenant_raises(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with shared_tenant_session(session_factory, TENANT_A):
+            with pytest.raises(RuntimeError, match="already open"):
+                async with shared_tenant_session(session_factory, TENANT_A):
+                    pass
+
+    async def test_a_block_left_by_closing_its_generator_lends_nothing_after(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Yielding inside a block is forbidden, but if a generator does and is
+        then closed, later sessions in the same task are not handed the closed
+        one."""
+
+        async def holds() -> Any:
+            async with shared_tenant_session(session_factory, TENANT_A) as session:
+                yield session
+
+        frames = holds()
+        shared = await anext(frames)
+        await frames.aclose()
+
+        async with tenant_session(session_factory, TENANT_A) as after:
+            assert after is not shared

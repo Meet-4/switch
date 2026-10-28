@@ -96,3 +96,14 @@ async def test_without_a_limit_every_block_goes_in(
 
     release.set()
     await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+
+
+async def test_a_block_inside_another_raises_rather_than_waiting_on_its_own_slot(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    buffer = db_buffer_on(session_factory, session_slots=1)
+    async with buffer.one_session(TENANT_ZERO_ID):
+        with pytest.raises(RuntimeError, match="inside another"):
+            async with asyncio.timeout(2):
+                async with buffer.one_session(TENANT_ZERO_ID):
+                    pass

@@ -10,6 +10,8 @@ query, not one per pooled connection, which is the trade the default makes.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -51,6 +53,20 @@ async def _fill_and_close_pool(
                 await conn.execute(
                     text("select pg_terminate_backend(:pid)"), {"pid": pid}
                 )
+            # Termination is a signal: wait until the backends have exited, or
+            # one could still answer a ping and then die under the next query.
+            for _ in range(100):
+                left = await conn.scalar(
+                    text(
+                        "select count(*) from pg_stat_activity where pid = any(:pids)"
+                    ),
+                    {"pids": list(pids)},
+                )
+                if not left:
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                raise AssertionError("the closed backends did not exit")
     finally:
         await closer.dispose()
     return engine, pids

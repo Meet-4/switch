@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -39,6 +38,7 @@ from switch_core.management.notifier import (
     ControllerNotifier,
 )
 from tests.db_buffer import age_events, say
+from tests.session_counting import CountingSessionFactory
 from tests.switch_core.management.harness import (
     Harness,
     add_member,
@@ -56,19 +56,6 @@ from tests.switch_core.management.harness import (
     report_status,
     take,
 )
-
-
-class _CountingFactory:
-    """The buffer's session factory, counting the sessions opened through it.
-    One session is one pool checkout."""
-
-    def __init__(self, inner: async_sessionmaker[AsyncSession]) -> None:
-        self._inner = inner
-        self.opened = 0
-
-    def __call__(self) -> Any:
-        self.opened += 1
-        return self._inner()
 
 
 @pytest.fixture
@@ -255,7 +242,7 @@ class TestOpening:
         await take(stream, 2)
         await _ask(harness, agent_id, room_id, "@you")
         buffer = harness.protocol.event_buffer
-        counting = _CountingFactory(buffer._session_factory)
+        counting = CountingSessionFactory(buffer._session_factory)
         monkeypatch.setattr(buffer, "_session_factory", counting)
         [(name, data)] = await take(stream, 1)
         await stream.aclose()

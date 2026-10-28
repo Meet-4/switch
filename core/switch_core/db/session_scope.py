@@ -118,6 +118,15 @@ async def tenant_session(
             yield session
 
 
+def holds_shared_session(
+    session_factory: async_sessionmaker[AsyncSession], tenant_id: str
+) -> bool:
+    """Whether this task is inside a `shared_tenant_session` block for this
+    factory and tenant."""
+    lent = _lent.get()
+    return lent is not None and lent.serves(session_factory, tenant_id)
+
+
 @asynccontextmanager
 async def shared_tenant_session(
     session_factory: async_sessionmaker[AsyncSession], tenant_id: str
@@ -131,22 +140,33 @@ async def shared_tenant_session(
     block ends the transaction, not the session: the next statement begins a
     new one, and `after_begin` stamps the tenant on it as on any other.
 
+    Leaving an inner `tenant_session` closes and rolls back nothing. An
+    uncommitted write in one inner block is committed by the next inner
+    `commit`, and an inner `rollback` (as in an `except` around a write) rolls
+    back the whole shared transaction. A write added to such a block has to
+    commit or roll back with that in mind.
+
     The block holds a connection from its first statement to its end, so it
     must contain database work only. Nothing in it may wait on a client, a
     socket or a timer, and a generator must not yield inside it, or the
-    connection is held for as long as its consumer takes to come back.
+    connection is held for as long as its consumer takes to come back. A block
+    must not open another for the same tenant: that raises.
     """
+    if holds_shared_session(session_factory, tenant_id):
+        raise RuntimeError(
+            "a shared tenant session is already open in this task for this tenant"
+        )
     async with tenant_session(session_factory, tenant_id) as session:
         token = _lent.set(
             _Lent(session_factory, tenant_id, asyncio.current_task(), session)
         )
-        finalising = False
         try:
             yield session
-        except GeneratorExit:
-            # Not reset, for the reason `tenant_context._held` gives.
-            finalising = True
-            raise
         finally:
-            if not finalising:
+            try:
                 _lent.reset(token)
+            except ValueError:
+                # Unwound by GeneratorExit in another context, a frame being
+                # garbage collected: nothing there to restore, for the reason
+                # `tenant_context._held` gives.
+                pass

@@ -143,8 +143,9 @@ version of their own to them without also giving them a release of their own.
   transactions, and the pre-ping added a transaction to every checkout. The
   reads of a pass now share one session, for an agent on its own socket and
   for each agent an agent controller serves. `DB_POOL_PRE_PING` now defaults
-  to `false`: after a database restart the first query on each pod fails, and
-  the pool then replaces every connection it held. Set it to `true` behind
+  to `false`: after a database restart the first query on each pod fails, along
+  with any query running at the time, and the pool then replaces every
+  connection it held. Set it to `true` behind
   anything that drops idle connections. In a load test of 300 agents at 10
   messages a second on 2 pods, CPU per message fell by a quarter and database
   transactions per message by more than two thirds. At most half of a pod's

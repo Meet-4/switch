@@ -741,8 +741,9 @@ class SwitchConfig(BaseSettings):
     # is a connection that died while it sat in the pool, as every pooled
     # connection does when the database restarts or fails over. Without it the
     # first query on such a connection fails, and SQLAlchemy then replaces
-    # every connection the pool held, so the restart costs one failed query
-    # rather than none (`test_pool_pre_ping.py`). How soon a connection left
+    # every connection the pool held. So on each pod the first query fails
+    # (`test_pool_pre_ping.py`), along with any query that was running when the
+    # database went, which fails with the ping too. How soon a connection left
     # open by a failover is known to be dead is up to `db_tcp_keepalive_*` and
     # `db_tcp_user_timeout` below, with the ping or without it.
     db_pool_pre_ping: bool = False

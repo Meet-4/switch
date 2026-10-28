@@ -104,7 +104,11 @@ from switch_core.db.models import (
     PendingAttachmentGroup,
     Room,
 )
-from switch_core.db.session_scope import shared_tenant_session, tenant_session
+from switch_core.db.session_scope import (
+    holds_shared_session,
+    shared_tenant_session,
+    tenant_session,
+)
 from switch_core.observability.catalogue import (
     AGENT_BUFFER_SCAN_DURATION,
     AGENT_BUFFER_SCANNED,
@@ -374,6 +378,12 @@ _UNREAD_SQL = text(
 ).bindparams(bindparam("throughs", type_=ARRAY(BigInteger)))
 
 
+def session_slots_for(pool_size: int, max_overflow: int) -> int:
+    """How many `EventBuffer.one_session` blocks may hold a connection at once:
+    half the pool, so requests still find one when the pod is saturated."""
+    return max(1, (pool_size + max_overflow) // 2)
+
+
 class EventBuffer:
     def __init__(
         self,
@@ -382,7 +392,7 @@ class EventBuffer:
         sequence_base: int,
         rooms: RoomAnnouncements,
         retention_seconds: float = DEFAULT_RETENTION_SECONDS,
-        session_slots: int | None = None,
+        session_slots: int | None,
     ) -> None:
         self._session_factory = session_factory
         # How many `one_session` blocks may hold a connection at once in this
@@ -427,6 +437,10 @@ class EventBuffer:
         streams' passes come to hold most of the pool, and a request (a send, a
         context read, authentication) waits out the pool timeout and fails.
         """
+        # Checked before taking a slot: a nested block would otherwise wait on
+        # its own slot once every slot is taken, a deadlock seen only under load.
+        if holds_shared_session(self._session_factory, tenant_id):
+            raise RuntimeError("one_session opened inside another in the same task")
         slots = self._session_slots or nullcontext()
         async with (
             slots,
