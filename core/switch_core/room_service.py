@@ -40,6 +40,7 @@ from switch_core.db.models import (
     Room,
     RoomGroup,
     RoomRole,
+    TenantMember,
 )
 from switch_core.db.session_scope import tenant_session
 from switch_core.db.stores.agent_store import AgentStore
@@ -1491,9 +1492,15 @@ class RoomService:
 
     async def _retire_room(self, tenant_id: str, bridge_id: str, room: Room) -> None:
         # Claims are self-service and record no admin approval, so an account
-        # claimed by several people links none of them.
+        # claimed by several people links none of them. Removing a member
+        # keeps their claims, so only current members' claims count.
         sole_claims = (
             select(ExternalUserClaim.external_user_id)
+            .join(
+                TenantMember,
+                (TenantMember.user_id == ExternalUserClaim.user_id)
+                & (TenantMember.tenant_id == tenant_id),
+            )
             .group_by(ExternalUserClaim.external_user_id)
             .having(func.count() == 1)
         )
@@ -1519,10 +1526,8 @@ class RoomService:
                     )
                 ).scalars()
             )
-        owner = room.owner_id or room.created_by
-        await self._join_people(
-            tenant_id, room.id, [], [*linked, *([owner] if owner else [])]
-        )
+        owners = [i for i in dict.fromkeys((room.owner_id, room.created_by)) if i]
+        await self._join_people(tenant_id, room.id, [], [*linked, *owners])
         async with tenant_session(self._session_factory, tenant_id) as session:
             row = await session.get(Room, room.id)
             assert row is not None

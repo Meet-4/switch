@@ -1,7 +1,8 @@
+import { BUILD_FEATURE_FLAGS } from '@shared/core/feature-flags/feature-flags';
 import type { TelemetryFlintEnv } from '../../telemetry/config';
 import { LOCAL_SERVER_ADMIN_EMAIL, LOCAL_SERVER_BIND_ADDR } from '../constants';
 import {
-  MANAGED_SERVER_FEATURE_FLAGS,
+  managedServerFeatureFlags,
   TELEMETRY_ENABLED_KEY,
   TELEMETRY_ENDPOINT_KEY,
 } from '../env-file';
@@ -19,6 +20,8 @@ export type NativeCoreSettingsParams = {
   telemetryInternal: boolean;
   /** The relay the server sends its usage to: the one the app reports to. */
   telemetryEndpoint: string;
+  /** Whether switch-core runs from this repo's checkout rather than the pin. */
+  fromCheckout: boolean;
 };
 
 export function nativeApiUrl(apiPort: number): string {
@@ -32,7 +35,7 @@ export function nativeApiUrl(apiPort: number): string {
  * Pure, so the exact output is unit-testable.
  */
 export function buildNativeCoreSettings(params: NativeCoreSettingsParams): Record<string, string> {
-  const { apiPort, postgresPort, secrets, telemetryEnabled } = params;
+  const { apiPort, postgresPort, secrets, telemetryEnabled, fromCheckout } = params;
   const apiUrl = nativeApiUrl(apiPort);
   return {
     SERVER_HOST: LOCAL_SERVER_BIND_ADDR,
@@ -48,7 +51,10 @@ export function buildNativeCoreSettings(params: NativeCoreSettingsParams): Recor
     AGENT_REGISTRATION_TOKEN: secrets.agentRegistrationToken,
     JWT_SECRET_KEY: secrets.jwtSecretKey,
     SECRET_KEYS: secrets.secretKeys,
-    FEATURE_FLAGS_ENABLED: MANAGED_SERVER_FEATURE_FLAGS.join(','),
+    FEATURE_FLAGS_ENABLED: managedServerFeatureFlags(
+      BUILD_FEATURE_FLAGS.onboarding,
+      fromCheckout
+    ).join(','),
     CONTROLLER_TOKEN_SECRET: secrets.controllerTokenSecret,
     GATEWAY_ADMIN_EMAIL: LOCAL_SERVER_ADMIN_EMAIL,
     GATEWAY_ADMIN_PASSWORD: secrets.gatewayAdminPassword,

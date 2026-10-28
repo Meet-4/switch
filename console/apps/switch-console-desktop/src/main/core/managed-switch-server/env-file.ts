@@ -1,4 +1,5 @@
 import { BUILD_FEATURE_FLAGS } from '@shared/core/feature-flags/feature-flags';
+import { CHECKOUT_IMAGE_TAG } from '@shared/core/managed-switch-server/managed-switch-server';
 import type { TelemetryFlintEnv } from '../telemetry/config';
 import { LOCAL_SERVER_ADMIN_EMAIL, LOCAL_SERVER_BIND_ADDR } from './constants';
 import { apiUrlFor, gatewayUrlFor, type LocalServerPorts } from './free-port';
@@ -36,11 +37,15 @@ export type LocalServerEnvParams = {
  * in-Console agent chats. A build with the new first run also
  * gets what switch-buddy needs (agent management and the buddy itself),
  * addressing an agent without tagging it, and connectors such as GitHub
- * (service connections).
+ * (service connections). A stack run from a checkout runs this repo's
+ * switch-core, which also knows group chats.
  */
-export function managedServerFeatureFlags(newFirstRun: boolean): readonly string[] {
+export function managedServerFeatureFlags(
+  newFirstRun: boolean,
+  fromCheckout: boolean
+): readonly string[] {
   // shortcut: group_chats is left out until the pinned switch-core knows it; add it when the pin moves
-  const chats = ['agent_chats'];
+  const chats = fromCheckout ? ['agent_chats', 'group_chats'] : ['agent_chats'];
   return newFirstRun
     ? [
         'agent_management',
@@ -51,11 +56,6 @@ export function managedServerFeatureFlags(newFirstRun: boolean): readonly string
       ]
     : chats;
 }
-
-/** The feature flags every managed stack is started with, in this build. */
-export const MANAGED_SERVER_FEATURE_FLAGS = managedServerFeatureFlags(
-  BUILD_FEATURE_FLAGS.onboarding
-);
 
 /** The variable the server reads its telemetry gate from. Named here because
  * reading the choice back off a host has to look for the same key. */
@@ -112,8 +112,10 @@ export function buildEnvFile(params: LocalServerEnvParams): string {
     `AGENT_REGISTRATION_TOKEN=${secrets.agentRegistrationToken}`,
     `JWT_SECRET_KEY=${secrets.jwtSecretKey}`,
     `SECRET_KEYS=${secrets.secretKeys}`,
-    // The flags a managed stack runs with (MANAGED_SERVER_FEATURE_FLAGS).
-    `FEATURE_FLAGS_ENABLED=${MANAGED_SERVER_FEATURE_FLAGS.join(',')}`,
+    `FEATURE_FLAGS_ENABLED=${managedServerFeatureFlags(
+      BUILD_FEATURE_FLAGS.onboarding,
+      version === CHECKOUT_IMAGE_TAG
+    ).join(',')}`,
     `CONTROLLER_TOKEN_SECRET=${secrets.controllerTokenSecret}`,
     `GATEWAY_ADMIN_EMAIL=${LOCAL_SERVER_ADMIN_EMAIL}`,
     `GATEWAY_ADMIN_PASSWORD=${secrets.gatewayAdminPassword}`,

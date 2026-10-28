@@ -302,6 +302,7 @@ export async function startNativeStack(opts: NativeStartOptions): Promise<StartL
       telemetryEnvironment: currentFlintEnv(),
       telemetryInternal: (await currentInternalFlag()) === 'true',
       telemetryEndpoint: nativeServerTelemetryEndpoint(),
+      fromCheckout: checkoutRoot !== null,
     });
     await writeDeployedVersion(layout, install.version);
     onMessage('Starting switch-core…');

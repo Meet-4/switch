@@ -344,3 +344,44 @@ async def test_an_account_claimed_by_two_people_links_neither(
     assert not await _in_room(chats, room.id, chats.bob)
     assert not await _in_room(chats, room.id, chats.admin)
     assert await _in_room(chats, room.id, chats.alice)
+
+
+async def test_a_removed_members_claim_does_not_unlink_a_current_member(
+    chats: _Harness,
+) -> None:
+    room = await _agentless_room(chats, "Mattermost: alumni")
+    bridge = await _retiring_bridge(chats, room)
+    await _person_on(chats, bridge, "bob", in_room=room, claimed_by=chats.bob)
+    async with chats.factory() as session:
+        external = await session.scalar(
+            select(ExternalUser).where(ExternalUser.external_user_id == "mm-bob")
+        )
+        assert external is not None
+        # carol has no tenant membership: a removed member whose claim remains.
+        session.add(
+            ExternalUserClaim(external_user_id=external.id, user_id=chats.carol.id)
+        )
+        await session.commit()
+
+    await chats.room_service.retire_mattermost_bridges()
+
+    assert await _in_room(chats, room.id, chats.bob)
+
+
+@pytest.mark.parametrize("owner", ["none", "removed member"])
+async def test_a_retired_room_with_no_joinable_owner_moves_to_its_creator(
+    chats: _Harness, owner: str
+) -> None:
+    room = await _agentless_room(chats, "Mattermost: ownerless")
+    async with chats.factory() as session:
+        row = await session.get(Room, room.id)
+        assert row is not None
+        row.owner_id = chats.carol.id if owner == "removed member" else None
+        row.created_by = chats.alice.id
+        await session.commit()
+    bridge = await _retiring_bridge(chats, room)
+    await _person_on(chats, bridge, "stranger", in_room=room, claimed_by=None)
+
+    await chats.room_service.retire_mattermost_bridges()
+
+    assert await _in_room(chats, room.id, chats.alice)

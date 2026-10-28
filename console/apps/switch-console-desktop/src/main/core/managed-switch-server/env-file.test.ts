@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { BUILD_FEATURE_FLAGS } from '@shared/core/feature-flags/feature-flags';
+import { CHECKOUT_IMAGE_TAG } from '@shared/core/managed-switch-server/managed-switch-server';
 import {
   buildEnvFile,
   keysDisagreeing,
-  MANAGED_SERVER_FEATURE_FLAGS,
   managedServerFeatureFlags,
   readStackEnv,
   telemetryRequested,
@@ -29,18 +30,20 @@ const composeYaml = readFileSync(
   'utf8'
 );
 
+const envParams = {
+  version: '1.2.3',
+  registry: 'ghcr.io',
+  namespace: 'sandbox-quantum',
+  ports: { gateway: 51000, api: 51001, postgres: 51003 },
+  secrets,
+  telemetryEnabled: false,
+  telemetryEnvironment: 'prod',
+  telemetryInternal: false,
+  telemetryEndpoint: 'https://relay.example.test',
+} as const;
+
 describe('buildEnvFile', () => {
-  const env = buildEnvFile({
-    version: '1.2.3',
-    registry: 'ghcr.io',
-    namespace: 'sandbox-quantum',
-    ports: { gateway: 51000, api: 51001, postgres: 51003 },
-    secrets,
-    telemetryEnabled: false,
-    telemetryEnvironment: 'prod',
-    telemetryInternal: false,
-    telemetryEndpoint: 'https://relay.example.test',
-  });
+  const env = buildEnvFile(envParams);
   const vars = Object.fromEntries(
     env
       .split('\n')
@@ -79,18 +82,27 @@ describe('buildEnvFile', () => {
   });
 
   it("starts a managed stack with this build's feature flags", () => {
-    expect(vars.FEATURE_FLAGS_ENABLED).toBe(MANAGED_SERVER_FEATURE_FLAGS.join(','));
+    expect(vars.FEATURE_FLAGS_ENABLED).toBe(
+      managedServerFeatureFlags(BUILD_FEATURE_FLAGS.onboarding, false).join(',')
+    );
+    expect(vars.FEATURE_FLAGS_ENABLED.split(',')).not.toContain('group_chats');
+  });
+
+  it('turns on group chats only for a stack built from a checkout', () => {
+    const checkout = buildEnvFile({ ...envParams, version: CHECKOUT_IMAGE_TAG });
+    expect(checkout).toMatch(/^FEATURE_FLAGS_ENABLED=.*\bgroup_chats\b/m);
+    expect(managedServerFeatureFlags(false, true)).toEqual(['agent_chats', 'group_chats']);
   });
 
   it('turns on what switch-buddy needs only in a build with the new first run', () => {
-    expect(managedServerFeatureFlags(true)).toEqual([
+    expect(managedServerFeatureFlags(true, false)).toEqual([
       'agent_management',
       'agent_chats',
       'switch_buddy',
       'follow_the_conversation',
       'service_connections',
     ]);
-    expect(managedServerFeatureFlags(false)).toEqual(['agent_chats']);
+    expect(managedServerFeatureFlags(false, false)).toEqual(['agent_chats']);
   });
 
   it('runs switch-core as the restricted runtime role, not the schema owner', () => {
