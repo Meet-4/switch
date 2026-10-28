@@ -15,6 +15,8 @@ from switch_core.trust.client import (
     TrustFinding,
 )
 
+# The start of a real PNG: not text, so Switch Trust cannot read it.
+_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
 _FINDING = (TrustFinding(category="secrets", detector_name="s", severity="high"),)
 
 
@@ -95,7 +97,7 @@ async def test_blocked_caption_sends_nothing_and_raises() -> None:
         await svc.send_media(
             "agent-1",
             "room-1",
-            [(b"png", "cat.png", "image/png")],
+            [(_PNG, "cat.png", "image/png")],
             caption="FORBIDDEN",
         )
 
@@ -125,7 +127,7 @@ async def test_blocked_file_text_sends_nothing_and_says_which_file() -> None:
             "agent-1",
             "room-1",
             [
-                (b"png", "cat.png", "image/png"),
+                (_PNG, "cat.png", "image/png"),
                 (b"FORBIDDEN", "leak.env", "text/plain"),
             ],
         )
@@ -137,7 +139,7 @@ async def test_blocked_file_text_sends_nothing_and_says_which_file() -> None:
 async def test_image_is_sent_with_a_not_checked_notice() -> None:
     svc, client, notices = _build(_ContentTrustClient())
 
-    await svc.send_media("agent-1", "room-1", [(b"png", "cat.png", "image/png")])
+    await svc.send_media("agent-1", "room-1", [(_PNG, "cat.png", "image/png")])
 
     assert client.uploads == ["cat.png"]
     [(kind, event_id, annotation, outcome)] = notices
@@ -153,7 +155,7 @@ async def test_agents_receive_the_not_checked_note_with_the_file() -> None:
     await svc.send_media(
         "agent-1",
         "room-1",
-        [(b"png", "cat.png", "image/png"), (b"fine", "notes.txt", "text/plain")],
+        [(_PNG, "cat.png", "image/png"), (b"fine", "notes.txt", "text/plain")],
         caption="have a look",
     )
 
@@ -171,7 +173,7 @@ async def test_a_later_failed_upload_still_posts_the_notice_for_files_sent() -> 
             "agent-1",
             "room-1",
             [
-                (b"png", "cat.png", "image/png"),
+                (_PNG, "cat.png", "image/png"),
                 (b"fine", "unsendable.txt", "text/plain"),
             ],
         )

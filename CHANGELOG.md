@@ -50,7 +50,8 @@ version of their own to them without also giving them a release of their own.
   person on a chat platform and from an agent sending files. Now the text is
   checked as any message is, and so is the text inside each file: plain text,
   JSON, YAML, CSV, Markdown, source code and anything else that reads as
-  text, Word documents (.docx) and PDFs. All of it is checked before anything
+  text whatever type or name it is sent with, Word documents (.docx) and
+  PDFs. All of it is checked before anything
   reaches the room. If the text or any file is blocked, nothing from the
   message is delivered and the sender is told why. A file whose text Switch
   Trust would redact blocks the message too, since a file cannot be redacted
