@@ -652,9 +652,10 @@ export type UpdateBridgeParams = {
   workspaceId: string;
   bridgeId: string;
   channelCreationEnabled?: boolean;
-  /** Connection-config fields to merge into the bridge's stored config — today
-   * only the distributed Teams app's default-team choice (`{ team_id }`).
-   * Left unset, the gateway leaves the stored config untouched. */
+  /** Connection-config fields to merge into the bridge's stored config: the
+   * distributed Teams app's default-team choice (`{ team_id }`), or new tokens
+   * for a connection to the workspace's own bot. Left unset, the gateway
+   * leaves the stored config untouched. */
   connectionConfig?: Record<string, string>;
 };
 
@@ -931,8 +932,8 @@ export type AgentProviderKind = 'anthropic' | 'third-party';
  */
 export type ProvisionAgentParams = {
   workspaceId: string;
-  /** The agent's working directory; the settings file is written here and used
-   * as `repo_dir` so an offline-session command can `cd` into it. */
+  /** The agent's working directory; the settings file is written here, and it
+   * is recorded as `repo_dir` so Console can find the agent on a remote host. */
   dir: string;
   name: string;
   description: string;
