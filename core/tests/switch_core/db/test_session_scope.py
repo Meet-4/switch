@@ -18,11 +18,14 @@ is pinned in `test_tenant_exemption_allowlist.py`.
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from switch_core.db.session_scope import tenant_session
+from switch_core.db.session_scope import shared_tenant_session, tenant_session
 from switch_core.tenant_context import current_tenant_id, tenant_scope
 
 TENANT_A = "tenant-session-scope-a"
@@ -86,3 +89,94 @@ class TestTenantSession:
         async with tenant_session(session_factory, TENANT_B) as session:
             assert await _current_setting(session) == TENANT_B
             await session.commit()
+
+
+class _CountingFactory:
+    """The real factory, counting the sessions opened through it."""
+
+    def __init__(self, inner: async_sessionmaker[AsyncSession]) -> None:
+        self._inner = inner
+        self.opened = 0
+
+    def __call__(self) -> Any:
+        self.opened += 1
+        return self._inner()
+
+
+class TestSharedTenantSession:
+    async def test_a_session_opened_inside_the_block_is_the_blocks(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        counting: Any = _CountingFactory(session_factory)
+        async with shared_tenant_session(counting, TENANT_A) as shared:
+            async with tenant_session(counting, TENANT_A) as first:
+                assert await _current_setting(first) == TENANT_A
+            async with tenant_session(counting, TENANT_A) as second:
+                assert await _current_setting(second) == TENANT_A
+        assert first is shared
+        assert second is shared
+        assert counting.opened == 1
+
+    async def test_another_tenant_opens_its_own(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with shared_tenant_session(session_factory, TENANT_A) as shared:
+            assert await _current_setting(shared) == TENANT_A
+            async with tenant_session(session_factory, TENANT_B) as other:
+                assert other is not shared
+                assert await _current_setting(other) == TENANT_B
+            assert await _current_setting(shared) == TENANT_A
+
+    async def test_another_task_opens_its_own(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A task started inside the block inherits its context, but two tasks
+        must never use one `AsyncSession` at once."""
+
+        async def opened() -> AsyncSession:
+            async with tenant_session(session_factory, TENANT_A) as session:
+                await _current_setting(session)
+                return session
+
+        async with shared_tenant_session(session_factory, TENANT_A) as shared:
+            assert await asyncio.create_task(opened()) is not shared
+
+    async def test_nothing_is_lent_once_the_block_exits(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with shared_tenant_session(session_factory, TENANT_A) as shared:
+            pass
+        async with tenant_session(session_factory, TENANT_A) as after:
+            assert after is not shared
+
+    async def test_an_inner_block_leaves_the_session_open(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with shared_tenant_session(session_factory, TENANT_A) as shared:
+            async with tenant_session(session_factory, TENANT_A) as inner:
+                await _current_setting(inner)
+            assert await _current_setting(shared) == TENANT_A
+
+    async def test_a_commit_inside_the_block_keeps_the_tenant(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A commit ends the transaction, and `set_config` is local to it; the
+        next transaction is stamped again by `after_begin`."""
+        async with shared_tenant_session(session_factory, TENANT_A):
+            async with tenant_session(session_factory, TENANT_A) as session:
+                assert await _current_setting(session) == TENANT_A
+                await session.commit()
+            async with tenant_session(session_factory, TENANT_A) as session:
+                assert await _current_setting(session) == TENANT_A
+
+    @pytest.mark.no_ambient_tenant
+    async def test_the_tenant_is_unbound_once_the_block_exits(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        with pytest.raises(RuntimeError, match="boom"):
+            async with shared_tenant_session(session_factory, TENANT_A):
+                async with tenant_session(session_factory, TENANT_A):
+                    raise RuntimeError("boom")
+        assert current_tenant_id() is None
+        async with tenant_session(session_factory, TENANT_A) as session:
+            assert await _current_setting(session) == TENANT_A

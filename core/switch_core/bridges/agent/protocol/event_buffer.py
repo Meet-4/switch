@@ -53,6 +53,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Iterable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -103,7 +104,7 @@ from switch_core.db.models import (
     PendingAttachmentGroup,
     Room,
 )
-from switch_core.db.session_scope import tenant_session
+from switch_core.db.session_scope import shared_tenant_session, tenant_session
 from switch_core.observability.catalogue import (
     AGENT_BUFFER_SCAN_DURATION,
     AGENT_BUFFER_SCANNED,
@@ -401,6 +402,19 @@ class EventBuffer:
         # listener sets it for own events written by other processes. The events
         # themselves are always read from `agent_events`.
         self._notify: dict[str, asyncio.Event] = {}
+
+    def one_session(self, tenant_id: str) -> AbstractAsyncContextManager[AsyncSession]:
+        """Everything this buffer reads and writes for `tenant_id` inside the
+        block, from the task that opened it, in one session.
+
+        Each method here opens a session of its own, so a stream's pass that
+        delivers, which asks for the agent's rooms, its head, its own events,
+        what was dropped after its position, its rooms' conversation and its
+        unread counts, cost six pool checkouts and as many transactions. In one
+        session it costs one of each. `shared_tenant_session` says what the
+        block may contain.
+        """
+        return shared_tenant_session(self._session_factory, tenant_id)
 
     # ------------------------------------------------------------------
     # Producing
