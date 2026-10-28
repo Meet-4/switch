@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from switch_core.aliases import validate_alias_format, validate_alias_map
@@ -1490,6 +1490,13 @@ class RoomService:
         )
 
     async def _retire_room(self, tenant_id: str, bridge_id: str, room: Room) -> None:
+        # Claims are self-service and record no admin approval, so an account
+        # claimed by several people links none of them.
+        sole_claims = (
+            select(ExternalUserClaim.external_user_id)
+            .group_by(ExternalUserClaim.external_user_id)
+            .having(func.count() == 1)
+        )
         async with tenant_session(self._session_factory, tenant_id) as session:
             linked = list(
                 (
@@ -1506,15 +1513,25 @@ class RoomService:
                             ExternalUser.tenant_id == tenant_id,
                             ExternalUser.bridge_id == bridge_id,
                             ClientRoom.room_id == room.id,
+                            ExternalUserClaim.external_user_id.in_(sole_claims),
                         )
                         .distinct()
                     )
                 ).scalars()
             )
-        await self._join_people(tenant_id, room.id, [], linked)
+        owner = room.owner_id or room.created_by
+        await self._join_people(
+            tenant_id, room.id, [], [*linked, *([owner] if owner else [])]
+        )
         async with tenant_session(self._session_factory, tenant_id) as session:
             row = await session.get(Room, room.id)
             assert row is not None
+            if not await self.chats.members(session, row):
+                logger.warning(
+                    "Retired Mattermost room %s (%s) has no Switch Console member",
+                    row.id,
+                    row.name,
+                )
             row.metadata_ = {
                 **(row.metadata_ or {}),
                 "retired_bridge": {

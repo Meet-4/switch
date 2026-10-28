@@ -277,3 +277,70 @@ async def test_only_a_retired_mattermost_connector_names_no_platform(
         )
 
     assert summary.bridge_type == shown
+
+
+async def _owned_by(chats: _Harness, room: Room, owner: User) -> None:
+    async with chats.factory() as session:
+        row = await session.get(Room, room.id)
+        assert row is not None
+        row.owner_id = owner.id
+        await session.commit()
+
+
+async def test_a_retired_room_with_no_linked_people_moves_to_its_owner(
+    chats: _Harness,
+) -> None:
+    room = await _agentless_room(chats, "Mattermost: plans")
+    await _owned_by(chats, room, chats.alice)
+    bridge = await _retiring_bridge(chats, room)
+    await _person_on(chats, bridge, "stranger", in_room=room, claimed_by=None)
+
+    await chats.room_service.retire_mattermost_bridges()
+
+    assert await _in_room(chats, room.id, chats.alice)
+
+
+async def test_a_retired_room_with_no_one_to_move_to_is_warned_and_still_unbound(
+    chats: _Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    room = await _agentless_room(chats, "Mattermost: empty")
+    bridge = await _retiring_bridge(chats, room)
+    await _person_on(chats, bridge, "stranger", in_room=room, claimed_by=None)
+
+    with caplog.at_level("WARNING", logger="switch_core.room_service"):
+        await chats.room_service.retire_mattermost_bridges()
+
+    assert any(
+        room.id in r.getMessage() and "Mattermost: empty" in r.getMessage()
+        for r in caplog.records
+        if r.levelname == "WARNING"
+    )
+    async with chats.factory() as session:
+        row = await session.get(Room, room.id)
+        assert row is not None
+        assert row.bridge_id is None
+        assert row.metadata_["retired_bridge"]["external_channel_id"] == "mm-chan"
+
+
+async def test_an_account_claimed_by_two_people_links_neither(
+    chats: _Harness,
+) -> None:
+    room = await _agentless_room(chats, "Mattermost: shared")
+    await _owned_by(chats, room, chats.alice)
+    bridge = await _retiring_bridge(chats, room)
+    await _person_on(chats, bridge, "bob", in_room=room, claimed_by=chats.bob)
+    async with chats.factory() as session:
+        external = await session.scalar(
+            select(ExternalUser).where(ExternalUser.external_user_id == "mm-bob")
+        )
+        assert external is not None
+        session.add(
+            ExternalUserClaim(external_user_id=external.id, user_id=chats.admin.id)
+        )
+        await session.commit()
+
+    await chats.room_service.retire_mattermost_bridges()
+
+    assert not await _in_room(chats, room.id, chats.bob)
+    assert not await _in_room(chats, room.id, chats.admin)
+    assert await _in_room(chats, room.id, chats.alice)

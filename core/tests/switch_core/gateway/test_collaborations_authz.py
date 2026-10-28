@@ -133,7 +133,7 @@ class TestIdentityRoutesAreSelfOrAdmin:
                     user_id="someone-else",
                 ),
                 session=object(),  # type: ignore[arg-type]
-                bridge_store=_StubGet(object()),  # type: ignore[arg-type]
+                bridge_store=_StubGet(SimpleNamespace(status="active")),  # type: ignore[arg-type]
                 external_user_store=_StubGet(None),  # type: ignore[arg-type]
                 user_store=_StubGet(None),  # type: ignore[arg-type]
                 collab_lifecycle=object(),  # type: ignore[arg-type]

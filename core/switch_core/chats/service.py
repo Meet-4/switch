@@ -5,8 +5,8 @@ Membership is the only read authority. A person sees a room when their
 the tenant; a room's visibility and any claimed platform account do not count.
 Membership is granted by creating a chat, by a room manager (the room's owner
 or a tenant admin) adding a tenant member, or by a manager adding themselves.
-With the `agent_chats` feature flag on, it is also granted to a person in each
-chat they started that holds an agent they own, for as long as it does:
+It is also granted to a person in each chat they started that holds an agent
+they own, for as long as it does:
 `sync_owned_rooms` puts them in and takes back what was held only for that.
 Other people's chats and rooms set up elsewhere never gain an agent's owner.
 
@@ -178,13 +178,11 @@ class ChatService:
         usage_store: UsageStore,
         id_server_name: str,
         media_max_bytes: int,
-        agent_chats_enabled: bool,
         group_chats_enabled: bool,
         connections: AgentConnectionRegistry,
     ) -> None:
         self.session_factory = session_factory
         self._connections = connections
-        self.agent_chats_enabled = agent_chats_enabled
         self.group_chats_enabled = group_chats_enabled
         self.listener = listener
         self.activity_listener = activity_listener
@@ -395,8 +393,6 @@ class ChatService:
         self, session: AsyncSession, user_id: str, room_id: str
     ) -> bool:
         """True when `sync_owned_rooms` keeps the user in this room."""
-        if not self.agent_chats_enabled:
-            return False
         return bool(
             await session.scalar(
                 select(exists().where(Room.id == room_id, _owner_joins(user_id)))
@@ -406,15 +402,14 @@ class ChatService:
     async def sync_owned_rooms(self, tenant_id: str, user_id: str) -> None:
         """Put the user in every live chat they started that holds an agent
         they own, and take back each membership held only for that once it no
-        longer satisfies that rule. With `agent_chats` off nothing satisfies
-        it: no one joins, and every such membership is taken back.
+        longer satisfies that rule.
 
         Such a membership is marked by a `ChatOwnerGrant`; being invited,
         creating the chat or joining as a manager removes the mark, and the
         membership then stays when the agent goes. Cheap when nothing changed:
         two queries.
         """
-        kept = _owner_joins(user_id) if self.agent_chats_enabled else false()
+        kept = _owner_joins(user_id)
         async with self._lock("owned", tenant_id, user_id):
             async with tenant_session(self.session_factory, tenant_id) as session:
                 if not await self.has_tenant_role(session, tenant_id, user_id):
@@ -516,10 +511,7 @@ class ChatService:
         """`sync_owned_rooms` for everyone a change to this room's agents may
         concern: the owners of its agents and the holders of owner grants.
         The room's other members are told too, as gaining or losing its
-        agents can move it into or out of their list. Does nothing with
-        `agent_chats` off."""
-        if not self.agent_chats_enabled:
-            return
+        agents can move it into or out of their list."""
         async with tenant_session(self.session_factory, tenant_id) as session:
             owners = set(
                 (
@@ -567,9 +559,7 @@ class ChatService:
 
     async def agent_changed(self, tenant_id: str, agent_id: str) -> None:
         """Wake the streams of everyone in a chat with this agent, so they
-        re-send its summaries. Does nothing with `agent_chats` off."""
-        if not self.agent_chats_enabled:
-            return
+        re-send its summaries."""
         async with tenant_session(self.session_factory, tenant_id) as session:
             members = (
                 await session.execute(

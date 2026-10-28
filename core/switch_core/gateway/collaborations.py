@@ -846,6 +846,11 @@ async def claim_bridge_identity(
     bridge = await bridge_store.get(session, bridge_id)
     if bridge is None:
         raise HTTPException(status_code=404, detail="Bridge not found")
+    if bridge.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Bridge is {bridge.status}; identities can only be claimed on an active bridge",
+        )
 
     target_user_id = payload.user_id or caller_id
     if target_user_id != caller_id and not is_admin:

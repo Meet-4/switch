@@ -10,7 +10,7 @@ it, and what runs is reproducible from that one pin.
 
 Two charts are published:
 
-* `switch` (deploy/remote/helm/switch): switch-core, gateway and setup.
+* `switch` (deploy/remote/helm/switch): switch-core and gateway.
 * `switch-hosted-controller` (deploy/hosted/chart): the controller that runs
   Switch cloud machines, and its one image.
 
