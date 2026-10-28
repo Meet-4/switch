@@ -520,6 +520,7 @@ describe('reporting what a template made', () => {
       inputs: {},
       filled: {},
       templateName: 'Buddy',
+      templateId: null,
       entryPoint: 'onboarding',
     });
 
@@ -592,6 +593,7 @@ describe('reporting what a template made', () => {
       inputs: {},
       filled: {},
       templateName: 'T',
+      templateId: null,
       entryPoint: 'template',
     });
 
@@ -635,6 +637,7 @@ describe('reporting what a template made', () => {
       inputs: {},
       filled: {},
       templateName: 'T',
+      templateId: null,
       entryPoint: 'template',
     });
 

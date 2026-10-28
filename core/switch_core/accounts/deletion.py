@@ -122,6 +122,7 @@ USER_REFERENCES: dict[tuple[str, str], Handling] = {
     ("workspace_service_settings", "updated_by"): "handed over",
     ("service_app_credentials", "updated_by"): "handed over",
     ("provider_connections", "user_id"): "database cascades",
+    ("template_installs", "owner_id"): "database cascades",
     ("external_user_claims", "user_id"): "database cascades",
     ("external_user_link_requests", "user_id"): "database cascades",
     ("external_user_link_requests", "requested_by_user_id"): "database clears",

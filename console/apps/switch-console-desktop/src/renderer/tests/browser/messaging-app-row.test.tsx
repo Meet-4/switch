@@ -133,6 +133,7 @@ function row(
       savingChannelCreation={false}
       onToggleChannelCreation={() => {}}
       onConnectChat={overrides.onConnectChat ?? null}
+      onReplaceToken={() => {}}
       onDisconnect={overrides.onDisconnect ?? (() => {})}
     />
   );
