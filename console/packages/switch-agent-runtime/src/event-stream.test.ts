@@ -510,6 +510,49 @@ describe('a server restart', () => {
   });
 });
 
+describe('a busy server', () => {
+  it('opens again when the server says, not on its own backoff', async () => {
+    vi.useFakeTimers();
+    serve((socket, index) => {
+      if (index === 0) {
+        socket.refuse(503, { code: 'busy', message: 'opening at capacity', retry_after_s: 12 });
+        return;
+      }
+      attach(socket, 0);
+    });
+    const { abort } = makeStream({ rooms: [] });
+
+    // The backoff alone would have opened again after 1 s.
+    await vi.advanceTimersByTimeAsync(11_900);
+    expect(server.sockets).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(server.sockets).toHaveLength(2);
+    abort.abort();
+  });
+
+  it('waits its turn even right after a restart', async () => {
+    vi.useFakeTimers();
+    serve((socket, index) => {
+      if (index === 0) {
+        attach(socket, 0);
+        queueMicrotask(() => socket.drop(1012, 'service restart'));
+      } else if (index === 1) {
+        socket.refuse(503, { code: 'busy', message: 'opening at capacity', retry_after_s: 30 });
+      } else {
+        attach(socket, 0);
+      }
+    });
+    const { abort } = makeStream({ rooms: [] });
+
+    // A restart alone retries within a second; the queue's time wins.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(server.sockets).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(server.sockets).toHaveLength(3);
+    abort.abort();
+  });
+});
+
 describe('reopening while an open is still in flight', () => {
   /**
    * A server that keeps the incarnation the way the real one does: every open

@@ -4124,6 +4124,10 @@ tags; see RELEASING.md.
 ### [Unreleased]
 
 #### Added
+- **Waits its turn when Switch is busy opening connections.** An open or an
+  attach refused as `busy` comes with when to try again, the controller's
+  place in the server's queue, and the controller now waits that long
+  instead of its own backoff.
 - **Provider logins given to the machine, on demand.** The controller makes an
   X25519 keypair at enrollment (or on its next run, for one enrolled before)
   and registers the public half. When its owner gives the machine a login
@@ -4221,6 +4225,10 @@ The Switch protocol client and MCP runtime
 ### [Unreleased]
 
 #### Added
+- **Waits its turn when Switch is busy opening connections.** A server
+  pacing a reconnect storm refuses an open as `busy` with when to open again,
+  which is this agent's place in its queue. The stream now waits that long,
+  even right after a restart, instead of retrying on its own schedule.
 - When the WebSocket never opens and the runtime asks for the event stream
   instead, the request carries `fallback=socket_never_opened` and the
   socket's close code as `fallback_close_code`, so the server's log can tell
