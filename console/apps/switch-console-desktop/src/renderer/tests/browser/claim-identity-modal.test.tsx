@@ -29,6 +29,7 @@ const claimBridgeIdentity = vi.hoisted(() => vi.fn());
 const issueIdentityLinkCode = vi.hoisted(() => vi.fn());
 const releaseBridgeIdentity = vi.hoisted(() => vi.fn());
 const cancelIdentityLinkRequest = vi.hoisted(() => vi.fn());
+const reportIdentityConfirmed = vi.hoisted(() => vi.fn());
 
 vi.mock('@renderer/lib/ipc', () => ({
   rpc: {
@@ -41,18 +42,22 @@ vi.mock('@renderer/lib/ipc', () => ({
       issueIdentityLinkCode,
       releaseBridgeIdentity,
       cancelIdentityLinkRequest,
+      reportIdentityConfirmed,
     },
   },
   events: { on: () => () => {}, emit: () => {} },
 }));
 
+import { format } from 'date-fns';
 import type { AccountLinkTarget } from '@renderer/features/switch-servers/account-link-confirmation';
 import { ClaimIdentityModal } from '@renderer/features/switch-servers/ClaimIdentityModal';
 import { myIdentitiesQueryKey } from '@renderer/features/switch-servers/use-my-identities';
 import { Dialog } from '@renderer/lib/ui/dialog';
 import type {
+  ClaimIdentityResult,
   LinkCode,
   LinkedIdentity,
+  PendingIdentity,
   RemoteBridge,
 } from '@shared/core/switch-servers/switch-servers';
 
@@ -89,6 +94,7 @@ function inMinutes(minutes: number): string {
 const CODE: LinkCode = {
   code: '7KQ2-M9XD',
   expiresAt: inMinutes(30),
+  expiresInSeconds: 1800,
   instructions: 'Run `/link-account 7KQ2-M9XD` from that account in any channel Switch is in.',
 };
 
@@ -121,6 +127,17 @@ const PENDING_RESULT = {
 const onSuccess = vi.fn();
 const onClose = vi.fn();
 
+/** The links the server is holding for a code, as the pending list reports them. */
+let pendingOnServer: PendingIdentity[] = [];
+
+/** Answer the claim with `result`, starting a waiting link when it is one. */
+function claimReturns(result: ClaimIdentityResult): void {
+  claimBridgeIdentity.mockImplementation(async () => {
+    if (result.kind === 'pending' && !result.alreadyLinked) pendingOnServer = [result.pending];
+    return result;
+  });
+}
+
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
 let client: QueryClient;
@@ -135,6 +152,7 @@ beforeEach(() => {
     issueIdentityLinkCode,
     releaseBridgeIdentity,
     cancelIdentityLinkRequest,
+    reportIdentityConfirmed,
     onSuccess,
     onClose,
   ]) {
@@ -142,10 +160,12 @@ beforeEach(() => {
   }
   listBridges.mockResolvedValue([SLACK]);
   listMyIdentities.mockResolvedValue([]);
-  listMyPendingIdentities.mockResolvedValue([]);
+  pendingOnServer = [];
+  listMyPendingIdentities.mockImplementation(async () => pendingOnServer);
   searchBridgeDirectory.mockResolvedValue({ kind: 'results', users: [PERSON], note: null });
   releaseBridgeIdentity.mockResolvedValue(undefined);
   cancelIdentityLinkRequest.mockResolvedValue({ kind: 'cancelled' });
+  reportIdentityConfirmed.mockResolvedValue(undefined);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 });
 
@@ -209,7 +229,7 @@ async function claimAda(el: HTMLElement): Promise<void> {
 
 describe('linking an account on a server that wants proof', () => {
   it('stays open on the code rather than closing on the claim', async () => {
-    claimBridgeIdentity.mockResolvedValue(PENDING_RESULT);
+    claimReturns(PENDING_RESULT);
     const el = await render();
 
     await claimAda(el);
@@ -227,7 +247,7 @@ describe('linking an account on a server that wants proof', () => {
   });
 
   it('gives a new code in place of the old one', async () => {
-    claimBridgeIdentity.mockResolvedValue(PENDING_RESULT);
+    claimReturns(PENDING_RESULT);
     issueIdentityLinkCode.mockResolvedValue({
       kind: 'issued',
       code: { ...CODE, code: 'ZZ99-AB12' },
@@ -246,7 +266,7 @@ describe('linking an account on a server that wants proof', () => {
   });
 
   it('says so when the server will not give a new code', async () => {
-    claimBridgeIdentity.mockResolvedValue(PENDING_RESULT);
+    claimReturns(PENDING_RESULT);
     issueIdentityLinkCode.mockResolvedValue({
       kind: 'refused',
       message: 'You have not started linking this account. Link it first.',
@@ -260,7 +280,7 @@ describe('linking an account on a server that wants proof', () => {
   });
 
   it('cancels the link and goes back to the search', async () => {
-    claimBridgeIdentity.mockResolvedValue(PENDING_RESULT);
+    claimReturns(PENDING_RESULT);
     const el = await render();
     await claimAda(el);
 
@@ -278,7 +298,7 @@ describe('linking an account on a server that wants proof', () => {
   });
 
   it('shows the link confirmed once it turns up, then finishes', async () => {
-    claimBridgeIdentity.mockResolvedValue(PENDING_RESULT);
+    claimReturns(PENDING_RESULT);
     const el = await render();
     await claimAda(el);
 
@@ -291,10 +311,53 @@ describe('linking an account on a server that wants proof', () => {
     await vi.waitFor(() => expect(onSuccess).toHaveBeenCalledWith({ identity: LINKED }), {
       timeout: 3000,
     });
+    // Counted once, for the link this screen watched become confirmed.
+    expect(reportIdentityConfirmed).toHaveBeenCalledTimes(1);
+    expect(reportIdentityConfirmed).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      bridgeId: 'b-slack',
+      identityId: 'eu-1',
+      kind: 'pending',
+    });
+  });
+
+  it('notices a link cancelled somewhere else, and offers to start again', async () => {
+    claimReturns(PENDING_RESULT);
+    const el = await render();
+    await claimAda(el);
+    await settle();
+    expect(el.querySelector('[data-testid="link-code"]')).not.toBeNull();
+
+    // An admin cancels it: it is neither waiting nor linked any more.
+    pendingOnServer = [];
+    await act(async () => client.invalidateQueries({ queryKey: myIdentitiesQueryKey('ws-1') }));
+    await vi.waitFor(() => expect(el.textContent).toContain('was cancelled'));
+
+    expect(el.querySelector('[data-testid="link-code"]')).toBeNull();
+    await click(button(el, 'Start again'));
+    expect(el.textContent).toContain('Search Acme Slack');
+    expect(reportIdentityConfirmed).not.toHaveBeenCalled();
+  });
+
+  it('does not mistake a confirmation landing between two reads for a cancel', async () => {
+    // The pending list is read after the code is posted and the linked list
+    // just before: neither shows the link. A fresh read of the linked list
+    // settles it.
+    claimReturns(PENDING_RESULT);
+    const el = await render();
+    await claimAda(el);
+    await settle();
+
+    pendingOnServer = [];
+    listMyIdentities.mockResolvedValueOnce([]).mockResolvedValue([LINKED]);
+    await act(async () => client.invalidateQueries({ queryKey: myIdentitiesQueryKey('ws-1') }));
+
+    await vi.waitFor(() => expect(el.textContent).toContain('Linked to @ada.'));
+    expect(el.textContent).not.toContain('was cancelled');
   });
 
   it('stays on the code when there was nothing left to cancel', async () => {
-    claimBridgeIdentity.mockResolvedValue(PENDING_RESULT);
+    claimReturns(PENDING_RESULT);
     cancelIdentityLinkRequest.mockResolvedValue({
       kind: 'refused',
       message: 'Nothing is waiting to be confirmed.',
@@ -312,7 +375,7 @@ describe('linking an account on a server that wants proof', () => {
     // The server answers such a claim with a code like any other; the link it
     // already has works meanwhile, so the screen must not talk of finishing a
     // link, and Cancel must withdraw only the code.
-    claimBridgeIdentity.mockResolvedValue({ ...PENDING_RESULT, alreadyLinked: true });
+    claimReturns({ ...PENDING_RESULT, alreadyLinked: true });
     const el = await render();
     await claimAda(el);
 
@@ -325,9 +388,9 @@ describe('linking an account on a server that wants proof', () => {
   });
 
   it('says when the code has run out, and offers a new one', async () => {
-    claimBridgeIdentity.mockResolvedValue({
+    claimReturns({
       ...PENDING_RESULT,
-      code: { ...CODE, expiresAt: inMinutes(-1) },
+      code: { ...CODE, expiresInSeconds: 0 },
     });
     const el = await render();
     await claimAda(el);
@@ -340,9 +403,9 @@ describe('linking an account on a server that wants proof', () => {
   it('keeps looking for the link after the code seems to have run out', async () => {
     // The expiry is read off this machine's clock. One running fast would
     // otherwise stop the app noticing a code that was posted in time.
-    claimBridgeIdentity.mockResolvedValue({
+    claimReturns({
       ...PENDING_RESULT,
-      code: { ...CODE, expiresAt: inMinutes(-1) },
+      code: { ...CODE, expiresInSeconds: 0 },
     });
     const el = await render();
     await claimAda(el);
@@ -356,8 +419,41 @@ describe('linking an account on a server that wants proof', () => {
   });
 });
 
+describe('a clock on this machine that is wrong', () => {
+  it('counts a fresh code from when it arrived, not from the server’s clock', async () => {
+    // This machine runs 45 minutes fast, so the server's "expires at" is
+    // already in its past. The code has its full 30 minutes all the same.
+    claimReturns({
+      ...PENDING_RESULT,
+      code: { ...CODE, expiresAt: inMinutes(-15), expiresInSeconds: 1800 },
+    });
+    const before = format(Date.now() + 1_800_000, 'HH:mm');
+    const el = await render();
+    await claimAda(el);
+    const after = format(Date.now() + 1_800_000, 'HH:mm');
+
+    expect(el.textContent).not.toContain('This code has expired.');
+    expect(button(el, 'Copy')?.disabled).toBe(false);
+    // The deadline is shown on the clock the user is looking at.
+    const shown = /It expires at (\d\d:\d\d)/.exec(el.textContent ?? '')?.[1];
+    expect([before, after]).toContain(shown);
+  });
+
+  it('falls back to the server’s expiry from a server that sends no lifetime', async () => {
+    claimReturns({
+      ...PENDING_RESULT,
+      code: { ...CODE, expiresAt: inMinutes(-1), expiresInSeconds: null },
+    });
+    const el = await render();
+    await claimAda(el);
+
+    await vi.waitFor(() => expect(el.textContent).toContain('This code has expired.'));
+  });
+});
+
 describe('opening straight on a link that needs its code', () => {
   it('asks for a fresh code on open, once', async () => {
+    pendingOnServer = [PENDING_RESULT.pending];
     issueIdentityLinkCode.mockResolvedValue({ kind: 'issued', code: CODE });
     const el = await render({ identityId: 'eu-1', externalUsername: 'ada', kind: 'pending' });
 
@@ -386,6 +482,19 @@ describe('opening straight on a link that needs its code', () => {
     });
     expect(releaseBridgeIdentity).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);
+    // Requests for links that already exist are not in the pending list, so
+    // it is not watched for one.
+    expect(listMyPendingIdentities).not.toHaveBeenCalled();
+  });
+
+  it('does not count a link that was already confirmed when it opened', async () => {
+    listMyIdentities.mockResolvedValue([LINKED]);
+    issueIdentityLinkCode.mockResolvedValue({ kind: 'issued', code: CODE });
+    const el = await render({ identityId: 'eu-1', externalUsername: 'ada', kind: 'unverified' });
+
+    await vi.waitFor(() => expect(el.textContent).toContain('@ada is confirmed.'));
+    await vi.waitFor(() => expect(onSuccess).toHaveBeenCalled(), { timeout: 3000 });
+    expect(reportIdentityConfirmed).not.toHaveBeenCalled();
   });
 
   it('closes without cancelling anything', async () => {
@@ -404,7 +513,7 @@ describe('opening straight on a link that needs its code', () => {
 
 describe('a server that predates confirming links', () => {
   it('links at once and closes, as before', async () => {
-    claimBridgeIdentity.mockResolvedValue({ kind: 'claimed', identity: LINKED });
+    claimReturns({ kind: 'claimed', identity: LINKED });
     const el = await render();
 
     await claimAda(el);

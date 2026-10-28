@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from switch_core import messaging_platforms
+from switch_core.account_links import LINK_CODE_TTL
 from switch_core.bridges.collaboration.adapter import (
     ConfigEditRefused,
     DirectorySearchBusy,
@@ -44,7 +45,7 @@ from switch_core.db.models import (
     require_tenant_id,
 )
 from switch_core.db.stores.collaboration_bridge_store import CollaborationBridgeStore
-from switch_core.db.stores.external_user_store import ExternalUserStore
+from switch_core.db.stores.external_user_store import ExternalUserStore, NoSuchLink
 from switch_core.db.stores.messaging_install_store import MessagingInstallStore
 from switch_core.db.stores.room_store import RoomStore
 from switch_core.db.stores.user_store import UserStore
@@ -875,12 +876,9 @@ async def claim_bridge_identity(
     if bridge is None:
         raise HTTPException(status_code=404, detail="Bridge not found")
 
-    target_user_id = payload.user_id or caller_id
-    if target_user_id != caller_id and not is_admin:
-        raise HTTPException(
-            status_code=403,
-            detail="Only an admin may claim a messaging identity for another user",
-        )
+    target_user_id = _require_self_or_admin(
+        user, is_admin, payload.user_id, "claim a messaging identity"
+    )
     # Membership, not existence: `users` is deployment-wide, and a claim
     # names who the account is recognised as inside this tenant.
     if (
@@ -948,6 +946,19 @@ async def claim_bridge_identity(
     request = await external_user_store.request_link(
         session, external_user, target_user_id, requested_by_user_id=caller_id
     )
+    # Read again now the request is written: a code posted while this ran may
+    # have confirmed the link, and a request for it would wait forever.
+    claim = await external_user_store.get_claim(
+        session, external_user.id, target_user_id
+    )
+    if claim is not None and claim.verified_at is not None:
+        await external_user_store.cancel_link_request(
+            session, external_user, target_user_id
+        )
+        await session.commit()
+        return await _identity_summary(
+            session, external_user_store, user_store, external_user, None
+        )
     code = (
         await _issue_code(
             session,
@@ -993,6 +1004,7 @@ async def _issue_code(
     return LinkCode(
         code=code,
         expires_at=expires_at,
+        expires_in_seconds=int(LINK_CODE_TTL.total_seconds()),
         instructions=collab_lifecycle.link_code_instructions(
             bridge_type, connection_config, code
         ),
@@ -1104,6 +1116,15 @@ async def issue_identity_link_code(
             )
         request = await external_user_store.request_link(
             session, external_user, caller_id, requested_by_user_id=caller_id
+        )
+        await record_audit_event(
+            session,
+            tenant_id=external_user.tenant_id,
+            actor_user_id=caller_id,
+            action=AuditAction.BRIDGE_IDENTITY_LINK_REQUESTED,
+            target_type="external_user",
+            target_id=external_user.id,
+            details={"bridge_id": bridge_id, "user_id": caller_id},
         )
     code = await _issue_code(
         session,
@@ -1218,13 +1239,24 @@ async def cancel_identity_link_request(
     target_user_id = _require_self_or_admin(
         user, is_admin, user_id, "cancel a link to a messaging identity"
     )
-    if not await external_user_store.cancel_link_request(
-        session, external_user, target_user_id
-    ):
+    try:
+        await external_user_store.cancel_link_request(
+            session, external_user, target_user_id
+        )
+    except NoSuchLink as e:
         raise HTTPException(
             status_code=404,
             detail="That user has no link to this account waiting to be confirmed",
-        )
+        ) from e
+    await record_audit_event(
+        session,
+        tenant_id=external_user.tenant_id,
+        actor_user_id=user.id,
+        action=AuditAction.BRIDGE_IDENTITY_LINK_CANCELLED,
+        target_type="external_user",
+        target_id=external_user.id,
+        details={"bridge_id": bridge_id, "user_id": target_user_id},
+    )
     await session.commit()
     return await _identity_summary(
         session, external_user_store, user_store, external_user, None
@@ -1252,19 +1284,27 @@ async def release_bridge_identity(
         user, is_admin, user_id, "release a messaging identity"
     )
 
-    released = await external_user_store.release(session, external_user, target_user_id)
-    if not released:
+    try:
+        released = await external_user_store.release(
+            session, external_user, target_user_id
+        )
+    except NoSuchLink as e:
         # Deleting nothing and reporting success would make a mistyped user id
         # look like an unlink that worked.
         raise HTTPException(
             status_code=404,
             detail="That user has no link to this messaging account",
-        )
+        ) from e
     await record_audit_event(
         session,
         tenant_id=external_user.tenant_id,
         actor_user_id=user.id,
-        action=AuditAction.BRIDGE_IDENTITY_RELEASED,
+        # A link that never counted was cancelled, not released.
+        action=(
+            AuditAction.BRIDGE_IDENTITY_RELEASED
+            if released.claim
+            else AuditAction.BRIDGE_IDENTITY_LINK_CANCELLED
+        ),
         target_type="external_user",
         target_id=external_user.id,
         details={"bridge_id": bridge_id, "user_id": target_user_id},

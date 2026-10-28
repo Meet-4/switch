@@ -64,9 +64,12 @@ export function hasUnlinkedMessagingApp(
  *
  * Unlike the warning above it does not wait for an owner-addressed agent.
  * Nothing is prompted while the linked accounts are unknown, for the same
- * reason as there, and an app with nothing linked waits for the pending list
- * too, since it decides which of two prompts to show. A connection that is down
- * is left out: nobody reaches an agent through it until it is back.
+ * reason as there. The pending list is not waited on: one that is still loading
+ * or failed to load reads as empty, so an app with nothing linked is asked to
+ * link rather than left with no prompt at all — the worst case is offering a
+ * fresh link where one is already waiting, which re-claiming it handles. A
+ * connection that is down is left out: nobody reaches an agent through it until
+ * it is back.
  */
 export type AccountLinkPrompt =
   | { kind: 'link'; bridge: RemoteBridge }
@@ -85,8 +88,7 @@ export function accountLinkPrompts(
       const linked = linkedIdentityOn(bridge.id, identities);
       if (linked?.verified) return [];
       if (linked !== null) return [{ kind: 'unverified', bridge, identity: linked }];
-      if (pending === null) return [];
-      const waiting = pending.find((p) => p.bridgeId === bridge.id);
+      const waiting = pending?.find((p) => p.bridgeId === bridge.id);
       return [waiting ? { kind: 'pending', bridge, link: waiting } : { kind: 'link', bridge }];
     });
 }

@@ -169,12 +169,34 @@ def test_a_link_from_before_confirmation_is_confirmed_on_a_rerun(
     setup_script: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     platforms = _Platforms(
-        claim=_PENDING, linked=[{"bridge_id": "bridge-1", "verified": False}]
+        claim=_PENDING,
+        linked=[
+            {"bridge_id": "bridge-1", "external_user_id": "mm-1", "verified": False}
+        ],
     )
 
     _run(setup_script, platforms, monkeypatch)
 
     assert any(path.endswith("/verify-session") for _m, path, _b in platforms.calls)
+
+
+def test_an_unconfirmed_link_to_another_account_is_left_alone(
+    setup_script: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The admin linked their own account before confirmation existed: setup
+    # must not add the seeded one beside it.
+    platforms = _Platforms(
+        claim=_PENDING,
+        linked=[
+            {"bridge_id": "bridge-1", "external_user_id": "mm-other", "verified": False}
+        ],
+    )
+
+    _run(setup_script, platforms, monkeypatch)
+
+    assert [(m, path) for m, path, _b in platforms.calls] == [
+        ("GET", "/gateway/auth/me/identities")
+    ]
 
 
 def test_a_confirmed_link_is_left_alone(

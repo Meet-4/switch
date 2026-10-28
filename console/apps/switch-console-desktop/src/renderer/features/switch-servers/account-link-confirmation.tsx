@@ -7,14 +7,10 @@ import { rpc } from '@renderer/lib/ipc';
 import { useModalContext } from '@renderer/lib/modal/modal-provider';
 import { Button } from '@renderer/lib/ui/button';
 import { Spinner } from '@renderer/lib/ui/spinner';
-import type {
-  CancelLinkRequestResult,
-  IssueLinkCodeResult,
-  LinkCode,
-  LinkedIdentity,
-} from '@shared/core/switch-servers/switch-servers';
-import { accountHandle } from './link-accounts-prose';
-import { useMyIdentities } from './use-my-identities';
+import { log } from '@renderer/utils/logger';
+import type { LinkCode, LinkedIdentity } from '@shared/core/switch-servers/switch-servers';
+import { accountHandle, linkRequestFailureText } from './link-accounts-prose';
+import { useMyIdentities, useMyPendingIdentities } from './use-my-identities';
 
 /** How often to look for the link having been confirmed. Nothing tells the app
  * when the code is posted, so it asks — for as long as the code is on screen,
@@ -46,6 +42,11 @@ export type AccountLinkTarget = {
  *
  * The server keeps no copy of a code, so there is no "show it again": every
  * code shown after the first is a new one, and asking for it retires the last.
+ *
+ * A pending link can also be cancelled somewhere else — by an admin, on another
+ * device, by unlinking — and the screen notices rather than waiting forever.
+ * An unverified link cannot be watched that way: the pending list leaves out
+ * requests for links that already exist, so its absence there says nothing.
  */
 export const AccountLinkConfirmation = observer(function AccountLinkConfirmation({
   workspaceId,
@@ -55,6 +56,7 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
   initialCode,
   onConfirmed,
   onCancelled,
+  onStartAgain,
 }: {
   workspaceId: string;
   bridgeId: string;
@@ -66,17 +68,29 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
   /** After the confirmation is withdrawn: a pending link is gone, an
    * unverified one stays as it was. Either way the code screen is done. */
   onCancelled: () => void;
+  /** After a pending link was found cancelled somewhere else, to link again. */
+  onStartAgain: () => void;
 }) {
   const { setCloseGuard } = useModalContext();
-  const [code, setCode] = useState<LinkCode | null>(initialCode);
+  const [openedAt] = useState(() => Date.now());
+  const [shown, setShown] = useState<ShownCode | null>(() =>
+    initialCode === null ? null : arrived(initialCode)
+  );
+  const code = shown?.code ?? null;
   const [expiredCode, setExpiredCode] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false);
   const expired = code !== null && expiredCode === code.code;
 
-  const { identities, refresh } = useMyIdentities(workspaceId, LINK_CONFIRMATION_POLL_MS);
+  const pollMs = gone ? false : LINK_CONFIRMATION_POLL_MS;
+  const { identities, refresh } = useMyIdentities(workspaceId, pollMs);
+  const { pending, updatedAt: pendingReadAt } = useMyPendingIdentities(
+    target.kind === 'pending' ? workspaceId : null,
+    pollMs
+  );
   const confirmed = identities?.find((i) => i.id === target.identityId && i.verified) ?? null;
 
   const issueCode = useCallback(async () => {
@@ -93,10 +107,10 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
       // pending one expires, and a refusal may mean it was confirmed meanwhile.
       refresh();
       if (result.kind !== 'issued') {
-        setError(issueFailureText(result));
+        setError(linkRequestFailureText(result));
         return;
       }
-      setCode(result.code);
+      setShown(arrived(result.code));
       setCopied(false);
     } catch (cause) {
       setError(failureText(cause, 'Could not get a new code.'));
@@ -116,13 +130,65 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
   }, [initialCode, issueCode]);
 
   useEffect(() => {
-    if (code === null) return;
+    if (shown === null || !Number.isFinite(shown.deadline)) return;
     const timer = setTimeout(
-      () => setExpiredCode(code.code),
-      Math.max(0, Date.parse(code.expiresAt) - Date.now())
+      () => setExpiredCode(shown.code.code),
+      Math.max(0, shown.deadline - Date.now())
     );
     return () => clearTimeout(timer);
-  }, [code]);
+  }, [shown]);
+
+  // Gone from the pending list and not linked either. Posting the code turns
+  // the request into a link in one step, but the two lists are read separately,
+  // so one read of each can straddle it and show neither. The pending read
+  // counts only if it was made since the screen opened; then a read of the
+  // linked accounts begun after it settles which happened.
+  const absent =
+    target.kind === 'pending' &&
+    !gone &&
+    confirmed === null &&
+    identities !== null &&
+    pending !== null &&
+    pendingReadAt >= openedAt &&
+    !pending.some((p) => p.id === target.identityId) &&
+    !identities.some((i) => i.id === target.identityId);
+  useEffect(() => {
+    if (!absent) return;
+    let current = true;
+    rpc.workspaces.listMyIdentities(workspaceId).then(
+      (fresh) => {
+        if (!current) return;
+        if (fresh.some((i) => i.id === target.identityId)) refresh();
+        else setGone(true);
+      },
+      (error: unknown) => log.warn('Could not check whether a link was cancelled', { error })
+    );
+    return () => {
+      current = false;
+    };
+  }, [absent, workspaceId, target.identityId, refresh]);
+
+  // Reported once, and only for a confirmation this screen saw happen: one
+  // that was already confirmed when it opened is not a moment it witnessed.
+  const sawUnconfirmed = useRef(false);
+  const reportedConfirmation = useRef(false);
+  useEffect(() => {
+    if (identities === null) return;
+    if (confirmed === null) {
+      sawUnconfirmed.current = true;
+      return;
+    }
+    if (!sawUnconfirmed.current || reportedConfirmation.current) return;
+    reportedConfirmation.current = true;
+    rpc.workspaces
+      .reportIdentityConfirmed({
+        workspaceId,
+        bridgeId,
+        identityId: target.identityId,
+        kind: target.kind,
+      })
+      .catch((error: unknown) => log.warn('Could not report a confirmed link', { error }));
+  }, [identities, confirmed, workspaceId, bridgeId, target.identityId, target.kind]);
 
   // Read through a ref so a caller's inline callback does not restart the hold
   // on every render.
@@ -154,7 +220,7 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
       });
       refresh();
       if (result.kind !== 'cancelled') {
-        setError(cancelFailureText(result));
+        setError(linkRequestFailureText(result));
         return;
       }
       onCancelled();
@@ -184,6 +250,22 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
         <Check className="size-4 shrink-0" />
         {target.kind === 'pending' ? `Linked to ${handle}.` : `${handle} is confirmed.`}
       </p>
+    );
+  }
+
+  if (gone) {
+    return (
+      <div
+        className="flex w-full flex-col items-start gap-4"
+        data-testid="account-link-confirmation"
+      >
+        <p className="text-sm text-foreground">
+          The link to {handle} was cancelled, so its code no longer works.
+        </p>
+        <Button size="sm" onClick={onStartAgain}>
+          Start again
+        </Button>
+      </div>
     );
   }
 
@@ -228,7 +310,7 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
         </p>
       )}
 
-      {code !== null &&
+      {shown !== null &&
         (expired ? (
           <p className="text-xs text-amber-600 dark:text-amber-500">
             This code has expired. Get a new one to{' '}
@@ -237,7 +319,9 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
         ) : (
           <p className="flex items-center gap-2 text-xs text-foreground-muted">
             <Spinner className="size-3" />
-            Waiting for the code. It expires at {expiryTime(code.expiresAt)}.
+            {Number.isFinite(shown.deadline)
+              ? `Waiting for the code. It expires at ${format(shown.deadline, 'HH:mm')}.`
+              : 'Waiting for the code.'}
           </p>
         ))}
 
@@ -264,9 +348,22 @@ export const AccountLinkConfirmation = observer(function AccountLinkConfirmation
   );
 });
 
-function expiryTime(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? 'soon' : format(date, 'HH:mm');
+/** A code with when it stops working, on this machine's clock. */
+type ShownCode = { code: LinkCode; deadline: number };
+
+/**
+ * The deadline is counted from when the code arrived, by the lifetime the
+ * server gave it, so a clock here that is minutes out still counts the right
+ * minutes — and the time shown agrees with the clock the user is looking at.
+ * The server's own `expiresAt` is used only when it sends no lifetime, and may
+ * be NaN, which shows no expiry at all rather than a wrong one.
+ */
+function arrived(code: LinkCode): ShownCode {
+  const deadline =
+    code.expiresInSeconds !== null
+      ? Date.now() + code.expiresInSeconds * 1000
+      : Date.parse(code.expiresAt);
+  return { code, deadline };
 }
 
 /** The server's instructions are a Markdown sentence whose only markup is
@@ -290,28 +387,4 @@ function InlineCode({ text }: { text: string }) {
       )}
     </>
   );
-}
-
-function cancelFailureText(
-  result: Exclude<CancelLinkRequestResult, { kind: 'cancelled' }>
-): string {
-  switch (result.kind) {
-    case 'unauthenticated':
-      return 'Your session for this server expired. Sign in again, then retry.';
-    case 'refused':
-      return result.message;
-    case 'error':
-      return result.message;
-  }
-}
-
-function issueFailureText(result: Exclude<IssueLinkCodeResult, { kind: 'issued' }>): string {
-  switch (result.kind) {
-    case 'unauthenticated':
-      return 'Your session for this server expired. Sign in again, then retry.';
-    case 'refused':
-      return result.message;
-    case 'error':
-      return result.message;
-  }
 }

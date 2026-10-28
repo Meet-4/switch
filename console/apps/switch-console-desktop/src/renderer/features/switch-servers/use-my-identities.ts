@@ -29,12 +29,15 @@ export function myPendingIdentitiesQueryKey(workspaceId: string | null): unknown
  *
  * `pollMs` re-reads on an interval while set, for a screen waiting on a code to
  * be posted from the account — nothing tells the app when that happens.
+ * `updatedAt` is when the list was last read successfully (0 before then), for
+ * telling which of two lists read separately is the newer.
  */
 export function useMyIdentities(
   workspaceId: string | null,
   pollMs: number | false = false
 ): {
   identities: LinkedIdentity[] | null;
+  updatedAt: number;
   isLoading: boolean;
   error: unknown;
   refresh: () => void;
@@ -53,6 +56,7 @@ export function useMyIdentities(
 
   return {
     identities: query.isSuccess ? query.data : null,
+    updatedAt: query.dataUpdatedAt,
     isLoading: query.isLoading,
     error: query.error,
     refresh,
@@ -65,16 +69,25 @@ export function useMyIdentities(
  * linked — they are shown so the person can finish or cancel the link.
  *
  * Null while unknown, as for {@link useMyIdentities}. A server that predates
- * confirming links answers with none.
+ * confirming links answers with none. `pollMs` and `updatedAt` are as there.
  */
-export function useMyPendingIdentities(workspaceId: string | null): {
+export function useMyPendingIdentities(
+  workspaceId: string | null,
+  pollMs: number | false = false
+): {
   pending: PendingIdentity[] | null;
+  updatedAt: number;
   error: unknown;
 } {
   const query = useQuery({
     queryKey: myPendingIdentitiesQueryKey(workspaceId),
     queryFn: () => rpc.workspaces.listMyPendingIdentities(workspaceId as string),
     enabled: workspaceId !== null,
+    refetchInterval: pollMs,
   });
-  return { pending: query.isSuccess ? query.data : null, error: query.error };
+  return {
+    pending: query.isSuccess ? query.data : null,
+    updatedAt: query.dataUpdatedAt,
+    error: query.error,
+  };
 }

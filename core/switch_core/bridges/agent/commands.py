@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
+from sqlalchemy import select
+
 from switch_core.agent_display_name import (
     agent_label,
     agent_label_with_identifier,
@@ -40,6 +42,7 @@ from switch_core.db.models import (
 )
 from switch_core.db.session_scope import tenant_session
 from switch_core.db.stores.agent_runtime_state_store import AgentRuntimeStateStore
+from switch_core.db.stores.external_user_store import NoSuchLink
 from switch_core.delivery.addressing import AddressingResolver
 from switch_core.events import CommandEvent
 from switch_core.transport import RoomRef
@@ -1372,13 +1375,16 @@ async def _cmd_link_account(
         await session.commit()
 
     # Names the Switch user, so whoever posted it sees who the account is now
-    # recognised as, and how to take that back if it is not them.
+    # recognised as, and how to take that back if it is not them. "The way you
+    # ran this" because platforms differ in how a command reaches Switch: typed
+    # with `!`, as a slash command, or with the app mentioned.
     await _reply(
         host,
         room,
         event,
         f"✅ Linked this {platform} account ({username}) to Switch user "
-        f"**{name}**. If that isn't you, run `!unlink-account {name}`.",
+        f"**{name}**. If that isn't you, run `unlink-account {name}` the way "
+        "you ran this command.",
     )
 
 
@@ -1407,11 +1413,12 @@ async def _cmd_unlink_account(
         claims = (
             await host._external_user_store.claims_for(session, [account.id])
         ).get(account.id, [])
-        users: dict[str, User] = {}
-        for claim in claims:
-            user = await host._user_store.get(session, claim.user_id)
-            if user is not None:
-                users[claim.user_id] = user
+        users = {
+            user.id: user
+            for user in await session.scalars(
+                select(User).where(User.id.in_([c.user_id for c in claims]))
+            )
+        }
         linked = sorted(
             (
                 (users[c.user_id].name, users[c.user_id].email, c)
@@ -1470,7 +1477,17 @@ async def _cmd_unlink_account(
             return
         user_id = matches[0].user_id
         name = users[user_id].name
-        await host._external_user_store.release(session, account, user_id)
+        try:
+            await host._external_user_store.release(session, account, user_id)
+        except NoSuchLink:
+            # Unlinked some other way while this ran: the outcome asked for.
+            await _reply(
+                host,
+                room,
+                event,
+                f"This account is no longer linked to Switch user **{name}**.",
+            )
+            return
         await record_audit_event(
             session,
             tenant_id=account.tenant_id,

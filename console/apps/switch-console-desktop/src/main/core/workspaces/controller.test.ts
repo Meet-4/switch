@@ -20,6 +20,7 @@ const fetchRoomDetail = vi.hoisted(() => vi.fn());
 const fetchManagedAgent = vi.hoisted(() => vi.fn());
 const claimIdentityOnServer = vi.hoisted(() => vi.fn());
 const cancelLinkRequestOnServer = vi.hoisted(() => vi.fn());
+const fetchMyIdentities = vi.hoisted(() => vi.fn());
 const managedAgentLocator = vi.hoisted(() =>
   vi.fn(async () => (controllerId: string) => (controllerId === 'c1' ? 'local' : 'remote'))
 );
@@ -119,7 +120,7 @@ vi.mock('@main/core/switch-servers/gateway-client', () => ({
   fetchBridgeTypes: vi.fn(),
   fetchConnectionAgents,
   fetchWorkspaceServices,
-  fetchMyIdentities: vi.fn(),
+  fetchMyIdentities,
   fetchMyPendingIdentities: vi.fn(),
   fetchRoomAgentIds: vi.fn(),
   fetchManagedAgent,
@@ -267,6 +268,68 @@ describe('linking a messaging account', () => {
     ).resolves.toEqual({ kind: 'cancelled' });
 
     expect(cancelLinkRequestOnServer).toHaveBeenCalledWith(expect.anything(), 'b1', 'eu-1');
+  });
+
+  describe('a confirmation the screen saw', () => {
+    const CONFIRMED = { id: 'eu-1', bridgeId: 'b1', bridgeType: 'slack', verified: true };
+    const REPORT = { workspaceId: 'ws', bridgeId: 'b1', identityId: 'eu-1', kind: 'pending' };
+
+    it('is reported once the server agrees the link is confirmed', async () => {
+      fetchMyIdentities.mockResolvedValue([CONFIRMED]);
+
+      await workspacesController.reportIdentityConfirmed(REPORT);
+
+      expect(trackEvent).toHaveBeenCalledWith('bridge_identity_confirmed', {
+        bridge_platform: 'slack',
+        link_kind: 'new',
+      });
+    });
+
+    it('names a link made before confirming as existing', async () => {
+      fetchMyIdentities.mockResolvedValue([CONFIRMED]);
+
+      await workspacesController.reportIdentityConfirmed({ ...REPORT, kind: 'unverified' });
+
+      expect(trackEvent).toHaveBeenCalledWith('bridge_identity_confirmed', {
+        bridge_platform: 'slack',
+        link_kind: 'existing',
+      });
+    });
+
+    it('reports a kind it does not recognise as unknown rather than passing it on', async () => {
+      fetchMyIdentities.mockResolvedValue([CONFIRMED]);
+
+      await workspacesController.reportIdentityConfirmed({ ...REPORT, kind: 'whatever' });
+
+      expect(trackEvent).toHaveBeenCalledWith('bridge_identity_confirmed', {
+        bridge_platform: 'slack',
+        link_kind: 'unknown',
+      });
+    });
+
+    it('is not reported when the server does not list the link as confirmed', async () => {
+      fetchMyIdentities.mockResolvedValue([{ ...CONFIRMED, verified: false }]);
+
+      await workspacesController.reportIdentityConfirmed(REPORT);
+
+      expect(trackEvent).not.toHaveBeenCalled();
+    });
+
+    it('asks the server nothing while sharing is off', async () => {
+      canSend.mockResolvedValueOnce(false);
+
+      await workspacesController.reportIdentityConfirmed(REPORT);
+
+      expect(fetchMyIdentities).not.toHaveBeenCalled();
+      expect(trackEvent).not.toHaveBeenCalled();
+    });
+
+    it('never fails, even when the server cannot be read', async () => {
+      fetchMyIdentities.mockRejectedValue(new Error('unreachable'));
+
+      await expect(workspacesController.reportIdentityConfirmed(REPORT)).resolves.toBeUndefined();
+      expect(trackEvent).not.toHaveBeenCalled();
+    });
   });
 
   it('reports a refused claim as a failure', async () => {

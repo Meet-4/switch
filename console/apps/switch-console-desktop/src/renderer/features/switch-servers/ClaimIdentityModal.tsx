@@ -104,6 +104,7 @@ export const ClaimIdentityModal = observer(function ClaimIdentityModal({
             // Back to the search when it was reached from there — the likeliest
             // reason to cancel is having picked the wrong account.
             onCancelled={() => (confirm ? onClose() : setWaiting(null))}
+            onStartAgain={() => setWaiting(null)}
           />
         </DialogContentArea>
         <DialogFooter>

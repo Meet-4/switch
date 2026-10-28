@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -28,7 +29,11 @@ from switch_core.db.models import (
     TenantMember,
     User,
 )
-from switch_core.db.stores.external_user_store import ExternalUserStore
+from switch_core.db.stores.external_user_store import (
+    ExternalUserStore,
+    LinkRelease,
+    NoSuchLink,
+)
 
 _STORE = ExternalUserStore()
 
@@ -164,7 +169,7 @@ class TestRelease:
         async with session_factory() as session:
             assert await _STORE.claimant_ids(session, external_user.id) == [staying]
 
-    async def test_releasing_a_claim_that_was_never_made_is_a_no_op(
+    async def test_releasing_a_claim_that_was_never_made_says_so(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         async with session_factory() as session:
@@ -176,8 +181,8 @@ class TestRelease:
             await session.commit()
 
         async with session_factory() as session:
-            await _STORE.release(session, external_user, stranger)
-            await session.commit()
+            with pytest.raises(NoSuchLink):
+                await _STORE.release(session, external_user, stranger)
 
         async with session_factory() as session:
             assert await _STORE.claimant_ids(session, external_user.id) == [holder]
@@ -538,11 +543,14 @@ class TestLinkRequests:
             await session.commit()
 
         async with session_factory() as session:
-            assert await _STORE.release(session, account, user_id) is True
+            assert await _STORE.release(session, account, user_id) == LinkRelease(
+                claim=False, request=True
+            )
             await session.commit()
 
         async with session_factory() as session:
-            assert await _STORE.release(session, account, user_id) is False
+            with pytest.raises(NoSuchLink):
+                await _STORE.release(session, account, user_id)
             assert await _STORE.redeem_link_code(session, account, code) is None
 
     async def test_deleting_the_switch_user_drops_their_requests(

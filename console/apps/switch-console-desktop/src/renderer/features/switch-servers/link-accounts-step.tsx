@@ -107,6 +107,7 @@ export const LinkAccountsStep = observer(function LinkAccountsStep({
             initialCode={waiting.code}
             onConfirmed={goBack}
             onCancelled={() => setLinking({ bridge, waiting: null })}
+            onStartAgain={() => setLinking({ bridge, waiting: null })}
           />
         ) : (
           <div className="flex w-full flex-col gap-4">

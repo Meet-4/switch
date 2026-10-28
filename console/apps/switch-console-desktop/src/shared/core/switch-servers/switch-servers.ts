@@ -896,34 +896,34 @@ export type PendingIdentity = {
  */
 export type LinkCode = {
   code: string;
-  /** ISO timestamp. */
+  /** ISO timestamp, on the server's clock. */
   expiresAt: string;
+  /** How long the code lasts, measured when it was issued. Counting from when
+   * it arrived is what keeps a wrong clock on this machine from showing a fresh
+   * code as expired. Null from a server that does not send it. */
+  expiresInSeconds: number | null;
   /** How to post it on this platform, in Markdown — it differs per platform. */
   instructions: string;
 };
 
 /**
- * Outcome of asking for a fresh link code. `refused` is the server saying there
- * is nothing to confirm — the link was cancelled, or is already confirmed — in
- * its own words.
+ * Why a request about a waiting confirmation did nothing. `refused` is the
+ * server saying there is nothing to act on — the link was confirmed or
+ * cancelled meanwhile — in its own words.
  */
-export type IssueLinkCodeResult =
-  | { kind: 'issued'; code: LinkCode }
+export type LinkRequestFailure =
   | { kind: 'refused'; message: string }
   | { kind: 'unauthenticated' }
   | { kind: 'error'; message: string };
 
+/** Outcome of asking for a fresh link code. */
+export type IssueLinkCodeResult = { kind: 'issued'; code: LinkCode } | LinkRequestFailure;
+
 /**
  * Outcome of withdrawing a confirmation that is waiting for its code. Only the
- * request goes: a link that already works stays. `refused` is the server saying
- * nothing is waiting — it was confirmed or cancelled meanwhile — in its own
- * words.
+ * request goes: a link that already works stays.
  */
-export type CancelLinkRequestResult =
-  | { kind: 'cancelled' }
-  | { kind: 'refused'; message: string }
-  | { kind: 'unauthenticated' }
-  | { kind: 'error'; message: string };
+export type CancelLinkRequestResult = { kind: 'cancelled' } | LinkRequestFailure;
 
 /**
  * Scoped agent-addressing permissions (CHOO-1585). Each dimension is "*" (any)

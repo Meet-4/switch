@@ -51,7 +51,7 @@ import type {
 import { bridgeTypesQueryKey, fetchBridgeTypes } from './bridge-platforms-loader';
 import { ConnectedChatsList } from './ConnectedChatsList';
 import { LinkAccountPrompts } from './link-account-prompts';
-import { accountHandle } from './link-accounts-prose';
+import { accountHandle, linkRequestFailureText } from './link-accounts-prose';
 import { orderBridges } from './messaging-apps-order';
 import {
   hasUnlinkedMessagingApp,
@@ -585,11 +585,7 @@ export function MessagingAppRow({
       // Re-read either way: a refusal means it was confirmed or cancelled
       // meanwhile, and the row should say which.
       onReleased();
-      if (result.kind === 'unauthenticated') {
-        setReleaseError('Your session for this server expired. Sign in again, then retry.');
-      } else if (result.kind !== 'cancelled') {
-        setReleaseError(result.message);
-      }
+      if (result.kind !== 'cancelled') setReleaseError(linkRequestFailureText(result));
     } catch (cause) {
       setReleaseError(failureText(cause, 'Could not cancel this link.'));
     } finally {

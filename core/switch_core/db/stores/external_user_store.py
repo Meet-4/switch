@@ -1,4 +1,5 @@
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 
@@ -20,6 +21,19 @@ from switch_core.db.models import (
     ExternalUserLinkRequest,
     TenantMember,
 )
+
+
+class NoSuchLink(LookupError):
+    """There was no link, or no waiting one, between this account and user."""
+
+
+@dataclass(frozen=True)
+class LinkRelease:
+    """What unlinking dropped: a claim that counted, a request that was
+    waiting, or both."""
+
+    claim: bool
+    request: bool
 
 
 class ExternalUserStore:
@@ -184,34 +198,49 @@ class ExternalUserStore:
     async def get_claim(
         self, session: AsyncSession, external_user_id: str, switch_user_id: str
     ) -> ExternalUserClaim | None:
-        return await session.get(ExternalUserClaim, (external_user_id, switch_user_id))
+        """The claim as the database has it now, not as this session last saw
+        it: a confirmation committed elsewhere a moment ago has to show."""
+        return await session.get(
+            ExternalUserClaim,
+            (external_user_id, switch_user_id),
+            populate_existing=True,
+        )
 
     async def release(
         self, session: AsyncSession, external_user: ExternalUser, switch_user_id: str
-    ) -> bool:
+    ) -> LinkRelease:
         """Drop one Switch user's claim on this account, and any request to
         link them to it, leaving anyone else's in place.
 
-        Returns whether there was either to drop, so a caller can tell a real
-        unlink from a no-op rather than reporting success either way.
+        Says which of the two there was, and raises `NoSuchLink` when there
+        was neither, so a mistyped user id is not reported as an unlink.
+
+        The request goes first: confirming a link locks the request and then
+        writes the claim, and taking the two in the other order here could
+        deadlock against it.
         """
-        claims = await session.execute(
-            delete(ExternalUserClaim).where(
-                ExternalUserClaim.external_user_id == external_user.id,
-                ExternalUserClaim.user_id == switch_user_id,
-            )
-        )
         requests = await session.execute(
             delete(ExternalUserLinkRequest).where(
                 ExternalUserLinkRequest.external_user_id == external_user.id,
                 ExternalUserLinkRequest.user_id == switch_user_id,
             )
         )
-        await session.flush()
-        return any(
-            cast("CursorResult[Any]", result).rowcount > 0
-            for result in (claims, requests)
+        claims = await session.execute(
+            delete(ExternalUserClaim).where(
+                ExternalUserClaim.external_user_id == external_user.id,
+                ExternalUserClaim.user_id == switch_user_id,
+            )
         )
+        await session.flush()
+        released = LinkRelease(
+            claim=cast("CursorResult[Any]", claims).rowcount > 0,
+            request=cast("CursorResult[Any]", requests).rowcount > 0,
+        )
+        if not released.claim and not released.request:
+            raise NoSuchLink(
+                f"User {switch_user_id} has no link to account {external_user.id}"
+            )
+        return released
 
     # ── Link requests (CHOO-3881) ────────────────────────────────────────────
 
@@ -280,10 +309,10 @@ class ExternalUserStore:
 
     async def cancel_link_request(
         self, session: AsyncSession, external_user: ExternalUser, switch_user_id: str
-    ) -> bool:
+    ) -> None:
         """Drop a request waiting for the account to confirm it, leaving any
         claim the pair already has (one made before links needed confirming)
-        as it is. Returns whether there was a request to drop."""
+        as it is. Raises `NoSuchLink` when nothing was waiting."""
         result = await session.execute(
             delete(ExternalUserLinkRequest).where(
                 ExternalUserLinkRequest.external_user_id == external_user.id,
@@ -291,7 +320,11 @@ class ExternalUserStore:
             )
         )
         await session.flush()
-        return cast("CursorResult[Any]", result).rowcount > 0
+        if cast("CursorResult[Any]", result).rowcount == 0:
+            raise NoSuchLink(
+                f"User {switch_user_id} has no link to account {external_user.id} "
+                "waiting to be confirmed"
+            )
 
     async def link_requests_of_user(
         self, session: AsyncSession, switch_user_id: str

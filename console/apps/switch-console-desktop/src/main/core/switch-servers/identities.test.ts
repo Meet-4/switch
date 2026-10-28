@@ -65,6 +65,7 @@ const SUMMARY = {
 const CODE = {
   code: '7KQ2-M9XD',
   expires_at: '2026-10-27T12:30:00Z',
+  expires_in_seconds: 1800,
   instructions: 'Post `!link-account 7KQ2-M9XD` from that account.',
 };
 
@@ -121,6 +122,7 @@ describe('claimIdentityOnServer', () => {
       code: {
         code: '7KQ2-M9XD',
         expiresAt: '2026-10-27T12:30:00Z',
+        expiresInSeconds: 1800,
         instructions: 'Post `!link-account 7KQ2-M9XD` from that account.',
       },
       alreadyLinked: false,
@@ -203,12 +205,23 @@ describe('issueLinkCodeOnServer', () => {
       code: {
         code: '7KQ2-M9XD',
         expiresAt: '2026-10-27T12:30:00Z',
+        expiresInSeconds: 1800,
         instructions: 'Post `!link-account 7KQ2-M9XD` from that account.',
       },
     });
     const [url, init] = fetchMock.mock.calls[0] as [string, { method: string }];
     expect(url).toBe('https://switch.example.com/gateway/collaborations/b1/identities/eu-1/code');
     expect(init.method).toBe('POST');
+  });
+
+  it('reads a code from a server that sends no lifetime', async () => {
+    // Such a server's expiry can only be read off its own clock, `expires_at`.
+    const { expires_in_seconds: _lifetime, ...older } = CODE;
+    fetchMock.mockResolvedValue(response(200, older));
+
+    await expect(issueLinkCodeOnServer(SERVER, 'b1', 'eu-1')).resolves.toMatchObject({
+      code: { expiresAt: '2026-10-27T12:30:00Z', expiresInSeconds: null },
+    });
   });
 
   it('passes on the server’s reason when the link is already confirmed', async () => {

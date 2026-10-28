@@ -14,10 +14,13 @@ from datetime import datetime
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from switch_core.db.audit import AuditAction
 from switch_core.db.models import (
     TENANT_ZERO_ID,
+    AuditEvent,
     Client,
     CollaborationBridge,
     ExternalUser,
@@ -223,6 +226,7 @@ class TestClaimWaitsForTheAccount:
             f"On slack, post `!link-account {request.code.code}`."
         )
         assert isinstance(request.code.expires_at, datetime)
+        assert request.code.expires_in_seconds == 1800
         assert summary.claimed_by == []  # type: ignore[attr-defined]
         assert await _claim_of(world, world.ada) is None
 
@@ -541,6 +545,33 @@ class TestCancelling:
                     user_id=world.ada.id,
                 )
         assert refused.value.status_code == 403
+
+    async def test_unlinking_a_link_that_never_counted_is_audited_as_a_cancel(
+        self, world: _World
+    ) -> None:
+        await _claim(world, world.ada)
+
+        async with world.session_factory() as session:
+            await release_bridge_identity(
+                world.bridge_id,
+                world.account.id,
+                session,
+                _STORE,
+                UserStore(),
+                world.ada,
+                False,
+            )
+
+        async with world.session_factory() as session:
+            actions = list(
+                await session.scalars(
+                    select(AuditEvent.action).where(
+                        AuditEvent.target_id == world.account.id
+                    )
+                )
+            )
+        assert AuditAction.BRIDGE_IDENTITY_LINK_CANCELLED in actions
+        assert AuditAction.BRIDGE_IDENTITY_RELEASED not in actions
 
     async def test_unlinking_nothing_is_a_404(self, world: _World) -> None:
         async with world.session_factory() as session:

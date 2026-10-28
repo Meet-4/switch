@@ -736,6 +736,9 @@ class LinkCode(BaseModel):
 
     code: str
     expires_at: datetime
+    # Its lifetime when issued, so a client can count down on its own clock
+    # rather than compare `expires_at` with a clock that may be wrong.
+    expires_in_seconds: int
     # How to post it on this platform, in Markdown. The platforms differ in
     # which messages reach Switch at all, so this is the bridge's to say.
     instructions: str
@@ -748,7 +751,7 @@ class LinkRequestSummary(BaseModel):
     # Only for the Switch user being linked, and only on the response that
     # issued it: the code is not stored, so a lost one is replaced, not shown
     # again. An admin linking someone else never gets one.
-    code: LinkCode | None = None
+    code: LinkCode | None
 
 
 class ExternalUserSummary(BaseModel):

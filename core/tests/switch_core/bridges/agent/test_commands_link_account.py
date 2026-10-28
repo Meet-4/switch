@@ -184,7 +184,7 @@ class TestLinkAccount:
         assert len(world.replies) == 1
         assert "**ada**" in world.replies[0]
         assert "Acme Slack" in world.replies[0]
-        assert "!unlink-account ada" in world.replies[0]
+        assert "`unlink-account ada` the way you ran this command" in world.replies[0]
         async with world.session_factory() as session:
             event = await session.scalar(
                 select(AuditEvent).where(

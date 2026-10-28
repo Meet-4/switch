@@ -226,6 +226,14 @@ describe('the link-your-account reminder', () => {
     });
   });
 
+  it('still asks to link when the pending links cannot be read', async () => {
+    listMyIdentities.mockResolvedValue([]);
+    listMyPendingIdentities.mockRejectedValue(new Error('pending links unavailable'));
+    const el = await render([bridge('b-slack', 'slack')]);
+
+    expect(el.textContent).toContain('Link your Slack account');
+  });
+
   it('prompts as before against a server that predates confirming links', async () => {
     // Such a server lists no pending links (its 404 reads as none) and every
     // link it reports reads as confirmed.

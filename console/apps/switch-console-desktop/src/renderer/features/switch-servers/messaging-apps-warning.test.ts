@@ -249,10 +249,10 @@ describe('accountLinkPrompts', () => {
     ]);
   });
 
-  it('waits for the pending links before choosing between link and finish', () => {
-    // Guessing "link" and then flipping to "finish linking" is a prompt that
-    // changes its mind under the cursor.
-    expect(accountLinkPrompts([slack], [], null)).toEqual([]);
+  it('still asks to link when the pending links are unknown or failed to load', () => {
+    // Withholding the prompt until the pending list arrives would withhold it
+    // for good on a server where that read fails.
+    expect(accountLinkPrompts([slack], [], null)).toEqual([{ kind: 'link', bridge: slack }]);
   });
 
   it('asks to confirm a link made before links had to be confirmed', () => {

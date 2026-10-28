@@ -106,7 +106,11 @@ import type {
   TelemetryRoomCreateSource,
   TelemetryServerKind,
 } from '@main/core/telemetry/events';
-import { entryPointOf, roomAgentsDirectionOf } from '@main/core/telemetry/narrow';
+import {
+  entryPointOf,
+  identityLinkKindOf,
+  roomAgentsDirectionOf,
+} from '@main/core/telemetry/narrow';
 import { telemetryService, trackEvent, trackEventAt } from '@main/core/telemetry/telemetry-service';
 import { log } from '@main/lib/logger';
 import type {
@@ -1024,6 +1028,46 @@ export const workspacesController = createRPCController({
     withReachableWorkspaceSession(params.workspaceId, (server) =>
       issueLinkCodeOnServer(server, params.bridgeId, params.identityId)
     ),
+
+  /**
+   * Report that a link the confirmation screen was waiting on is confirmed.
+   *
+   * The code is posted in the chat app, so the screen watching for it is the
+   * only thing that sees this happen; it says so, and `kind` is its own name for
+   * the link. The server is asked before anything is reported, so a screen that
+   * is wrong reports nothing — and nothing at all is asked while sharing is off.
+   * Never fails: a report that cannot be made is logged and dropped.
+   */
+  reportIdentityConfirmed: async (params: {
+    workspaceId: string;
+    bridgeId: string;
+    identityId: string;
+    kind: string;
+  }): Promise<void> => {
+    const at = Date.now();
+    try {
+      if (!(await telemetryService.canSend())) return;
+      const identities = await withWorkspaceSession(params.workspaceId, fetchMyIdentities);
+      const confirmed = identities.find(
+        (i) => i.id === params.identityId && i.bridgeId === params.bridgeId && i.verified
+      );
+      if (confirmed === undefined) return;
+      trackEventAt(
+        'bridge_identity_confirmed',
+        {
+          bridge_platform: bridgePlatformOfType(confirmed.bridgeType),
+          link_kind: identityLinkKindOf(params.kind),
+        },
+        at
+      );
+    } catch (error) {
+      log.warn('A confirmed link could not be checked to report it', {
+        event: 'telemetry_identity_confirmed',
+        errorCode: error instanceof GatewayError ? error.kind : 'error',
+        error: String(error),
+      });
+    }
+  },
 
   /** Withdraw the signed-in user's confirmation waiting on a code. A link that
    * already works stays; unlinking is {@link releaseBridgeIdentity}. */

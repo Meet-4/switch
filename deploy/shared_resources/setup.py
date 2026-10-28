@@ -371,20 +371,26 @@ def link_owner_identity(
     account's own Mattermost session instead, which it can open because it
     created the account.
 
-    Only ever claims when the admin holds no identity on this bridge, so a
-    re-run is a no-op. Someone who deliberately unlinks themselves and runs
-    setup again does get relinked; that is the cost of repairing every existing
+    Only ever claims when the admin holds no identity on this bridge, or holds
+    the seeded one unconfirmed, so a re-run is a no-op once it is confirmed.
+    Someone who deliberately unlinks themselves and runs setup again does get
+    relinked; that is the cost of repairing every existing
     deployment on its next run, and the manual control to undo it is still
     there.
     """
     resp = client.get("/gateway/auth/me/identities")
     if resp.is_success:
-        # A link from before links needed confirming reads as unverified, and
-        # is confirmed below like a new one.
-        if any(
-            i.get("bridge_id") == bridge_id and i.get("verified", True)
-            for i in resp.json()
-        ):
+        on_bridge = [i for i in resp.json() if i.get("bridge_id") == bridge_id]
+        # A link from before links needed confirming reads as unverified. One
+        # to the seeded account is confirmed below like a new link; one the
+        # admin made to some other account is theirs, and left alone.
+        unconfirmed_seeded = [
+            i
+            for i in on_bridge
+            if i.get("external_user_id") == external_user_id
+            and not i.get("verified", True)
+        ]
+        if on_bridge and not unconfirmed_seeded:
             print(f"Gateway admin already linked to a Mattermost account: {bridge_id}")
             return
     else:

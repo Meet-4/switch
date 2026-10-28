@@ -2108,6 +2108,8 @@ type IdentityClaimantJson = {
 type LinkCodeJson = {
   code: string;
   expires_at: string;
+  /** Absent from a server that predates it. */
+  expires_in_seconds?: number;
   instructions: string;
 };
 
@@ -2124,7 +2126,12 @@ type ExternalUserSummaryJson = {
 };
 
 export function mapLinkCode(json: LinkCodeJson): LinkCode {
-  return { code: json.code, expiresAt: json.expires_at, instructions: json.instructions };
+  return {
+    code: json.code,
+    expiresAt: json.expires_at,
+    expiresInSeconds: json.expires_in_seconds ?? null,
+    instructions: json.instructions,
+  };
 }
 
 /**
