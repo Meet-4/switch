@@ -168,6 +168,10 @@ first upgrade with `featureFlags.enabled` set explicitly without
 replica ignores the group-chat fields, so a request it serves can silently
 leave out people or agents.
 
+An explicit list replaces the default rather than adding to it. If you set
+`featureFlags.enabled` (or `FEATURE_FLAGS_ENABLED`) yourself, include
+`group_chats`; `agent_chats` is always on in this release and may stay listed.
+
 `switchCore.collaborationCallback` and `secrets.mattermostAdminPassword` /
 `mattermostUserPassword` are gone; remove them from your values. A
 `secrets.existingSecret` may drop its `MATTERMOST_*` keys.
@@ -240,7 +244,7 @@ off by default. The `agent_management` feature flag turns them on:
 ```yaml
 switchCore:
   featureFlags:
-    enabled: ["agent_management"]
+    enabled: ["agent_management", "agent_chats", "group_chats"]
 secrets:
   controllerTokenSecret: "<openssl rand -hex 32>"
 ```

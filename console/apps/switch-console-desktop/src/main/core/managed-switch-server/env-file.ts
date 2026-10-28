@@ -33,13 +33,14 @@ export type LocalServerEnvParams = {
 
 /**
  * The feature flags a server Console runs is started with. Every one gets
- * in-Console chats, one-to-one and group. A build with the new first run also
+ * in-Console agent chats. A build with the new first run also
  * gets what switch-buddy needs (agent management and the buddy itself),
  * addressing an agent without tagging it, and connectors such as GitHub
  * (service connections).
  */
 export function managedServerFeatureFlags(newFirstRun: boolean): readonly string[] {
-  const chats = ['agent_chats', 'group_chats'];
+  // shortcut: group_chats is left out until the pinned switch-core knows it; add it when the pin moves
+  const chats = ['agent_chats'];
   return newFirstRun
     ? [
         'agent_management',

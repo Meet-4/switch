@@ -53,7 +53,7 @@ to its controller's own key: Core relays only ciphertext.
 
 Switch Console offers cloud machines on a server whose `hosted_agents` feature
 flag is on. The server runs them only once it is set up as below, which needs
-agent management too: `FEATURE_FLAGS_ENABLED=hosted_agents,agent_management`,
+agent management too: `FEATURE_FLAGS_ENABLED=hosted_agents,agent_management,agent_chats,group_chats`,
 with `CONTROLLER_TOKEN_SECRET` set. Core refuses to start with
 `HOSTED_LAUNCH_CAPACITY` above 0 without agent management. A server with the
 flag on and nothing set up answers a claim with "This server does not support

@@ -86,12 +86,11 @@ describe('buildEnvFile', () => {
     expect(managedServerFeatureFlags(true)).toEqual([
       'agent_management',
       'agent_chats',
-      'group_chats',
       'switch_buddy',
       'follow_the_conversation',
       'service_connections',
     ]);
-    expect(managedServerFeatureFlags(false)).toEqual(['agent_chats', 'group_chats']);
+    expect(managedServerFeatureFlags(false)).toEqual(['agent_chats']);
   });
 
   it('runs switch-core as the restricted runtime role, not the schema owner', () => {

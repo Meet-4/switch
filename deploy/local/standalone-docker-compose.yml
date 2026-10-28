@@ -252,3 +252,5 @@ volumes:
   # release than the one that stops reading it.
   pgdata:
   tuwuneldata:
+  # Kept deliberately after Mattermost was removed, so a reset (`down -v`) still deletes it.
+  mmdata:
