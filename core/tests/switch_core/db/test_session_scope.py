@@ -104,7 +104,7 @@ class _CountingFactory:
 
 
 class TestSharedTenantSession:
-    async def test_a_session_opened_inside_the_block_is_the_blocks(
+    async def test_a_session_opened_inside_the_block_is_the_shared_session(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         counting: Any = _CountingFactory(session_factory)
