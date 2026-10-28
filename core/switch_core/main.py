@@ -759,6 +759,9 @@ async def run(config: SwitchConfig, process_id: str) -> None:
         sequence_base=event_boot << 32,
         rooms=message_listener,
         retention_seconds=config.agent_event_retention_seconds,
+        # Half the pool at most for the streams' passes, so requests still find
+        # a connection when the pod is saturated (`EventBuffer.one_session`).
+        session_slots=max(1, (config.db_pool_size + config.db_max_overflow) // 2),
     )
     # Listens for the `NOTIFY` that each insert into `agent_events` sends, and
     # wakes this process's streams for that agent, whichever process wrote it.

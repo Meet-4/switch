@@ -147,7 +147,9 @@ version of their own to them without also giving them a release of their own.
   the pool then replaces every connection it held. Set it to `true` behind
   anything that drops idle connections. In a load test of 300 agents at 10
   messages a second on 2 pods, CPU per message fell by a quarter and database
-  transactions per message by more than two thirds.
+  transactions per message by more than two thirds. At most half of a pod's
+  pool goes to streams' passes at once, so requests still get a connection
+  when the pod's CPU is saturated.
 - **A cloud machine can move to another instance type and keep its disk.**
   The hosted controller now launches every new instance of a machine as the
   instance type in its `gateway.json`, at the same moment it already moves the

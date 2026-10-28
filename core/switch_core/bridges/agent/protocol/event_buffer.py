@@ -52,8 +52,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Iterable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -382,8 +382,14 @@ class EventBuffer:
         sequence_base: int,
         rooms: RoomAnnouncements,
         retention_seconds: float = DEFAULT_RETENTION_SECONDS,
+        session_slots: int | None = None,
     ) -> None:
         self._session_factory = session_factory
+        # How many `one_session` blocks may hold a connection at once in this
+        # process; None for no limit. See `one_session`.
+        self._session_slots = (
+            asyncio.Semaphore(session_slots) if session_slots is not None else None
+        )
         # `sequence_base` comes from a database sequence that advances on every
         # boot (`main.py`), so it is above every number an earlier boot handed
         # out. An agent's first own event is numbered from it. A client still holding
@@ -403,7 +409,8 @@ class EventBuffer:
         # themselves are always read from `agent_events`.
         self._notify: dict[str, asyncio.Event] = {}
 
-    def one_session(self, tenant_id: str) -> AbstractAsyncContextManager[AsyncSession]:
+    @asynccontextmanager
+    async def one_session(self, tenant_id: str) -> AsyncIterator[AsyncSession]:
         """Everything this buffer reads and writes for `tenant_id` inside the
         block, from the task that opened it, in one session.
 
@@ -412,9 +419,20 @@ class EventBuffer:
         what was dropped after its position, its rooms' conversation and its
         unread counts, cost six pool checkouts and as many transactions. In one
         session it costs one of each. `shared_tenant_session` says what the
-        block may contain.
+        block may contain; a block must not open another.
+
+        At most `session_slots` blocks hold a connection at once, and a block
+        over that waits here holding nothing. When a pod's CPU is saturated,
+        every await inside a block takes longer, so without the limit the
+        streams' passes come to hold most of the pool, and a request (a send, a
+        context read, authentication) waits out the pool timeout and fails.
         """
-        return shared_tenant_session(self._session_factory, tenant_id)
+        slots = self._session_slots or nullcontext()
+        async with (
+            slots,
+            shared_tenant_session(self._session_factory, tenant_id) as session,
+        ):
+            yield session
 
     # ------------------------------------------------------------------
     # Producing
