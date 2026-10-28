@@ -15,6 +15,11 @@ from switch_core.trust.client import (
     TrustFinding,
 )
 
+# The start of a real PNG: not text, so Switch Trust cannot read it.
+_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+# A PDF that cannot be parsed and is not text: Switch tries to read it and
+# cannot, so it goes out with a "not checked" note.
+_BROKEN_PDF = b"%PDF-1.4\x00garbage"
 _FINDING = (TrustFinding(category="secrets", detector_name="s", severity="high"),)
 
 
@@ -100,7 +105,7 @@ async def test_blocked_caption_sends_nothing_and_raises() -> None:
         await svc.send_media(
             "agent-1",
             "room-1",
-            [(b"png", "cat.png", "image/png")],
+            [(_PNG, "cat.png", "image/png")],
             caption="FORBIDDEN",
         )
 
@@ -149,7 +154,7 @@ async def test_blocked_file_text_sends_nothing_and_says_which_file() -> None:
             "agent-1",
             "room-1",
             [
-                (b"png", "cat.png", "image/png"),
+                (_PNG, "cat.png", "image/png"),
                 (b"FORBIDDEN", "leak.env", "text/plain"),
             ],
         )
@@ -158,17 +163,28 @@ async def test_blocked_file_text_sends_nothing_and_says_which_file() -> None:
     assert notices == [("blocked", None)]
 
 
-async def test_image_is_sent_with_a_not_checked_notice() -> None:
+async def test_image_is_sent_without_a_notice() -> None:
+    svc, client, notices = _build(_ContentTrustClient())
+
+    result = await svc.send_media("agent-1", "room-1", [(_PNG, "cat.png", "image/png")])
+
+    assert client.uploads == ["cat.png"]
+    assert client.sends[0]["caption"] is None
+    assert notices == []
+    assert "trust" not in result
+
+
+async def test_unreadable_document_is_sent_with_a_not_checked_notice() -> None:
     svc, client, notices = _build(_ContentTrustClient())
 
     result = await svc.send_media(
-        "agent-1", "room-1", [(b"png", "cat.png", "image/png")]
+        "agent-1", "room-1", [(_BROKEN_PDF, "scan.pdf", "application/pdf")]
     )
 
-    assert client.uploads == ["cat.png"]
+    assert client.uploads == ["scan.pdf"]
     [(kind, event_id, annotation, outcome)] = notices
     assert (kind, event_id, outcome) == ("alert", "$media-event-1", "errored")
-    assert "did not check cat.png" in annotation
+    assert "did not check scan.pdf" in annotation
     assert result["trust"] == {"outcome": "errored", "note": annotation}
 
 
@@ -178,10 +194,10 @@ async def test_a_notice_that_could_not_be_posted_is_reported_as_such() -> None:
     )
 
     result = await svc.send_media(
-        "agent-1", "room-1", [(b"png", "cat.png", "image/png")]
+        "agent-1", "room-1", [(_BROKEN_PDF, "scan.pdf", "application/pdf")]
     )
 
-    assert client.uploads == ["cat.png"]
+    assert client.uploads == ["scan.pdf"]
     assert len(notices) == 1
     assert result["trust"] == {
         "outcome": "errored",
@@ -197,13 +213,16 @@ async def test_agents_receive_the_not_checked_note_with_the_file() -> None:
     await svc.send_media(
         "agent-1",
         "room-1",
-        [(b"png", "cat.png", "image/png"), (b"fine", "notes.txt", "text/plain")],
+        [
+            (_BROKEN_PDF, "scan.pdf", "application/pdf"),
+            (b"fine", "notes.txt", "text/plain"),
+        ],
         caption="have a look",
     )
 
     first, second = client.sends
     assert first["caption"].startswith("have a look\n\n")
-    assert "did not check cat.png" in first["caption"]
+    assert "did not check scan.pdf" in first["caption"]
     assert second["caption"] is None
 
 
@@ -215,16 +234,16 @@ async def test_a_later_failed_upload_still_posts_the_notice_for_files_sent() -> 
             "agent-1",
             "room-1",
             [
-                (b"png", "cat.png", "image/png"),
+                (_BROKEN_PDF, "scan.pdf", "application/pdf"),
                 (b"fine", "unsendable.txt", "text/plain"),
             ],
         )
 
-    assert client.uploads == ["cat.png"]
-    assert "did not check cat.png" in client.sends[0]["caption"]
+    assert client.uploads == ["scan.pdf"]
+    assert "did not check scan.pdf" in client.sends[0]["caption"]
     [(kind, event_id, annotation, _outcome)] = notices
     assert (kind, event_id) == ("alert", "$media-event-1")
-    assert "did not check cat.png" in annotation
+    assert "did not check scan.pdf" in annotation
 
 
 async def test_with_trust_off_nothing_is_checked() -> None:

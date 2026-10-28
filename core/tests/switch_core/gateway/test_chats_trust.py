@@ -99,7 +99,9 @@ async def test_an_unchecked_file_is_posted_with_a_note_and_a_redacted_caption(
     chats: _Harness,
 ) -> None:
     room_id, trust = await _chat(chats)
-    await _upload(chats, room_id, "u1", b"\x89PNG", "cat.png", "image/png")
+    await _upload(
+        chats, room_id, "u1", b"%PDF-1.4\x00garbage", "scan.pdf", "application/pdf"
+    )
 
     sent = await chats.send(
         chats.alice, room_id, "s1", "my token-123 FLAG", uploadIds=["u1"]
@@ -108,9 +110,23 @@ async def test_an_unchecked_file_is_posted_with_a_note_and_a_redacted_caption(
     assert sent.status_code == 200
     [row] = await chats.message_rows(room_id)
     assert row.body.startswith("my [redacted] FLAG\n\n")
-    assert "Switch Trust did not check cat.png (images cannot be checked)" in row.body
-    # The image's bytes were never sent as text.
+    assert (
+        "Switch Trust did not check scan.pdf (this PDF could not be read)" in row.body
+    )
+    # The file's bytes were never sent as text.
     assert [content for _, content in trust.checked] == ["my token-123 FLAG"]
+
+
+async def test_an_image_is_posted_without_a_note(chats: _Harness) -> None:
+    room_id, trust = await _chat(chats)
+    await _upload(chats, room_id, "u1", b"\x89PNG", "cat.png", "image/png")
+
+    sent = await chats.send(chats.alice, room_id, "s1", "look", uploadIds=["u1"])
+
+    assert sent.status_code == 200
+    [row] = await chats.message_rows(room_id)
+    assert row.body == "look"
+    assert [content for _, content in trust.checked] == ["look"]
 
 
 async def test_a_retry_after_the_post_is_answered_without_checking_again(

@@ -46,10 +46,13 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 # What Switch does with a file Switch Trust cannot read (an image, a scanned
-# PDF, an archive), or with the part of one it cannot. True relays it with a
-# visible "not checked" note on the message and a WARNING in the log; False
-# blocks the whole message instead. This is the one place that choice is
-# made, for people and agents alike.
+# PDF, an archive), or with the part of one it cannot. True relays it; False
+# blocks the whole message instead. A file Switch tried and failed to read,
+# or read only in part, carries a visible "not checked" note on the message
+# and a WARNING in the log. A file of a kind Switch never reads (an image, an
+# archive, a binary) carries no note: every screenshot would otherwise tell
+# its sender something they already know. This is the one place that choice
+# is made, for people and agents alike.
 RELAY_UNCHECKED_FILES = True
 
 
@@ -60,9 +63,9 @@ class AttachmentsVerdict:
     `blocked` means nothing from the message may be relayed; `block_reasons`
     says why, one plain phrase per file, for the notice, and `block` is the
     verdict to report it under. Otherwise `notes`
-    are the visible annotations the message must carry (a file not checked,
-    checked only in part, flagged, or not checked because Switch Trust
-    failed), and `flagged` is True when one of them is an ALERTED verdict."""
+    are the visible annotations the message must carry (a file Switch could
+    not read, checked only in part, flagged, or not checked because Switch
+    Trust failed; a file of a kind Switch never reads gets none), and `flagged` is True when one of them is an ALERTED verdict."""
 
     block: TrustCheckResult | None = None
     block_reasons: tuple[str, ...] = ()
@@ -170,7 +173,16 @@ async def check_attachments(
             )
         elif result is not None and result.outcome == "errored":
             notes.append(f"⚠️ _Switch Trust could not check {filename}._")
-        if unchecked:
+        if file_text.textless:
+            logger.info(
+                "Switch Trust does not read %s attachment %s (%s); relaying it "
+                "in room %s",
+                files[index][2],
+                filename,
+                file_text.unreadable_reason,
+                room_id,
+            )
+        elif unchecked:
             what = "" if file_text.text is None else "part of "
             logger.warning(
                 "Switch Trust did not check %s attachment %s (%s); relaying it "

@@ -6,7 +6,10 @@ else that decodes cleanly as UTF-8) is its decoded text, a Word document
 comments the body links to, and a PDF is the text of its pages, each up to
 `TRUST_FILE_TEXT_LIMIT` characters. Everything else (images, audio, video,
 archives, other office formats, binaries, scanned PDFs with no text layer,
-files that cannot be parsed) has no text that can be read here.
+files that cannot be parsed) has no text that can be read here. The type and
+extension a file arrives with are the sender's to choose, so a file labelled
+as one of those, or named .docx or .pdf but not one, is still read as text
+when its bytes are text.
 
 Word documents and PDFs are parsed in a separate, short-lived process
 (`read_file_text`), killed if it takes longer than
@@ -87,8 +90,10 @@ _DOCX_OPAQUE_PARTS = {
 }
 _ZIP_READABLE = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
 
-# Types never worth decoding: Switch has no way to read their text, and a
-# lucky UTF-8 decode of one would check bytes that mean nothing as text.
+# Types Switch has no way to read the text of. The type is only what the
+# sender declared, so a file of one of these is still read as text when its
+# bytes decode cleanly: real images and archives almost never do, and
+# checking a few that happen to costs far less than relaying unchecked text.
 _TEXTLESS_KINDS: tuple[tuple[str, str], ...] = (
     ("image/", "images cannot be checked"),
     ("audio/", "audio cannot be checked"),
@@ -111,9 +116,6 @@ _TEXTLESS_KINDS: tuple[tuple[str, str], ...] = (
     ("application/x-xz", "archives cannot be checked"),
 )
 
-# Image types that are text underneath, and so are checked as text.
-_TEXT_IMAGES = frozenset({"image/svg+xml"})
-
 DocumentKind = Literal["docx", "pdf"]
 
 
@@ -125,12 +127,15 @@ class FileText:
     set when only the start of the file was read ("the first 20,000
     characters"), and `skipped` names the parts of it that could not be read
     at all (a Word document's embedded document), each for the note that
-    says so."""
+    says so. `textless` is set when the file is of a kind Switch never reads
+    text from (an image, an archive, a binary), as opposed to one it tried
+    and failed to read."""
 
     text: str | None
     checked_part: str | None = None
     unreadable_reason: str | None = None
     skipped: tuple[str, ...] = field(default=())
+    textless: bool = False
 
 
 def _unreadable(reason: str) -> FileText:
@@ -147,6 +152,25 @@ def _capped(
             skipped=skipped,
         )
     return FileText(text=text, checked_part=checked_part, skipped=skipped)
+
+
+def _as_text(data: bytes) -> FileText | None:
+    """`data` as text, or None when it is not cleanly text."""
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+    if "\x00" in text:
+        # Valid UTF-8 can still be binary: NUL never appears in real text.
+        return None
+    return _capped(text)
+
+
+def _unparsed(data: bytes, reason: str) -> FileText:
+    """A file sent to a document parser that could not parse it. It went
+    there by its declared type or extension, which the sender chooses, so
+    one whose bytes are text is checked as text instead."""
+    return _as_text(data) or _unreadable(reason)
 
 
 def _refuse_dtd(*_args: object) -> None:
@@ -209,10 +233,13 @@ def _docx_part_text(stream: IO[bytes], budget: int) -> tuple[str, int, bool]:
             return "".join(pieces), read, True
 
 
+_UNREADABLE_COMPRESSION = "uses a compression Switch Trust does not read"
+
+
 def _member_problem(info: zipfile.ZipInfo, budget: int) -> str | None:
     """Why a zip member is not opened, checked from its header alone."""
     if info.compress_type not in _ZIP_READABLE:
-        return "uses a compression Switch Trust does not read"
+        return _UNREADABLE_COMPRESSION
     if info.file_size > budget:
         return "is larger than Switch Trust reads"
     return None
@@ -278,7 +305,7 @@ def _docx_text(data: bytes) -> FileText:
                     (r.target for r in package if r.kind == "officeDocument"), None
                 )
             if main is None or main.lower() not in members:
-                return _unreadable("this Word document could not be read")
+                return _unparsed(data, "this Word document could not be read")
             parts = [members[main.lower()]]
             try:
                 links = _relationships(archive, members, members[main.lower()].filename)
@@ -302,7 +329,12 @@ def _docx_text(data: bytes) -> FileText:
             stopped_early = False
             for index, info in enumerate(parts):
                 problem = _member_problem(info, budget)
-                if problem is not None:
+                # A body larger than the budget is read up to it rather than
+                # not at all: the reader stops there, so the size its header
+                # declares costs nothing, and its start is still checked.
+                if problem is not None and (
+                    index > 0 or problem == _UNREADABLE_COMPRESSION
+                ):
                     if index == 0:
                         return _unreadable(f"this Word document {problem}")
                     skipped.append(f"{info.filename}, which {problem}")
@@ -324,7 +356,7 @@ def _docx_text(data: bytes) -> FileText:
         RuntimeError,
     ):
         logger.warning("Could not read text from a Word document", exc_info=True)
-        return _unreadable("this Word document could not be read")
+        return _unparsed(data, "this Word document could not be read")
     text = "\n".join(p for p in pieces if p)
     if not text.strip():
         if skipped:
@@ -333,9 +365,14 @@ def _docx_text(data: bytes) -> FileText:
                 "could not be read"
             )
         return _unreadable("no text found in this Word document")
-    # Text past the cap stops the read, so `stopped_early` always means the
-    # text is over the cap, and `_capped` says how much was checked.
-    return _capped(text, skipped=tuple(skipped))
+    # Reading stops early at the text cap, which `_capped` reports, or at the
+    # byte budget, with less text than the cap.
+    checked_part = (
+        "the first part"
+        if stopped_early and len(text) <= TRUST_FILE_TEXT_LIMIT
+        else None
+    )
+    return _capped(text, checked_part, skipped=tuple(skipped))
 
 
 def _pdf_pages(reader: PdfReader) -> Iterator[PageObject]:
@@ -406,7 +443,7 @@ def _pdf_text(data: bytes) -> FileText:
         # (its own, but also ValueError, KeyError, struct errors); any of
         # them means the same here: this PDF could not be read.
         logger.warning("Could not read text from a PDF", exc_info=True)
-        return _unreadable("this PDF could not be read")
+        return _unparsed(data, "this PDF could not be read")
     text = "\n".join(pieces)
     if not text.strip():
         # A scanned PDF is pictures of text: nothing to check is not clean.
@@ -439,19 +476,15 @@ def extract_file_text(data: bytes, mimetype: str, filename: str) -> FileText:
     document = _document_kind(data, mimetype, filename)
     if document is not None:
         return _document_text(document, data)
+    as_text = _as_text(data)
+    if as_text is not None:
+        return as_text
     kind = normalise_mime_type(mimetype)
-    if kind not in _TEXT_IMAGES:
-        for prefix, reason in _TEXTLESS_KINDS:
-            if kind.startswith(prefix):
-                return _unreadable(reason)
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return _unreadable("binary files cannot be checked")
-    if "\x00" in text:
-        # Valid UTF-8 can still be binary: NUL never appears in real text.
-        return _unreadable("binary files cannot be checked")
-    return _capped(text)
+    reason = next(
+        (reason for prefix, reason in _TEXTLESS_KINDS if kind.startswith(prefix)),
+        "binary files cannot be checked",
+    )
+    return FileText(text=None, unreadable_reason=reason, textless=True)
 
 
 _worker_slots: weakref.WeakKeyDictionary[
@@ -516,6 +549,7 @@ async def _read_in_worker(kind: DocumentKind, data: bytes, filename: str) -> Fil
             checked_part=fields["checked_part"],
             unreadable_reason=fields["unreadable_reason"],
             skipped=tuple(fields["skipped"]),
+            textless=fields["textless"],
         )
     except (ValueError, KeyError, TypeError) as error:
         logger.warning(

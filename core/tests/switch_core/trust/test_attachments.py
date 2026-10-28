@@ -15,6 +15,7 @@ from switch_core.file_text import read_file_text
 from switch_core.trust import attachments
 from switch_core.trust.attachments import (
     TRUST_FILE_TEXT_LIMIT,
+    AttachmentsVerdict,
     check_attachments,
     extract_file_text,
 )
@@ -65,14 +66,13 @@ def test_text_like_files_are_read_as_text(mimetype: str, data: bytes) -> None:
 @pytest.mark.parametrize(
     ("mimetype", "data"),
     [
-        ("image/png", b"\x89PNG\r\n"),
-        # Even when the bytes happen to decode, a PDF is never checked as text.
-        ("application/pdf", b"%PDF-1.4 plain ascii"),
+        ("image/png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
+        ("application/pdf", b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n\x00"),
         (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            b"PK\x03\x04",
+            b"PK\x03\x04\x14\x00\x00\x00",
         ),
-        ("application/zip", b"PK\x03\x04"),
+        ("application/zip", b"PK\x03\x04\x14\x00\x00\x00"),
         ("application/octet-stream", b"\xff\xfe\x00\x01"),
         ("text/plain", b"nul\x00inside"),
     ],
@@ -83,6 +83,63 @@ def test_files_without_readable_text_are_never_sent_as_text(
     file_text = extract_file_text(data, mimetype, "file")
     assert file_text.text is None
     assert file_text.unreadable_reason
+
+
+@pytest.mark.parametrize(
+    ("mimetype", "filename"),
+    [
+        ("image/png", "secrets.txt"),
+        ("application/zip", "secrets.zip"),
+        ("audio/mpeg", "secrets.mp3"),
+        ("application/pdf", "notes.pdf"),
+        ("application/octet-stream", "notes.pdf"),
+        ("application/octet-stream", "notes.docx"),
+        (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "notes.docx",
+        ),
+    ],
+)
+def test_text_labelled_or_named_as_something_else_is_still_checked(
+    mimetype: str, filename: str
+) -> None:
+    # The type and the name are the sender's to choose; the bytes decide.
+    secret = b"API_KEY=placeholder-credential-value\n"
+    file_text = extract_file_text(secret, mimetype, filename)
+    assert file_text.text == secret.decode()
+    assert file_text.unreadable_reason is None
+
+
+async def test_text_named_as_a_document_is_checked_through_the_worker() -> None:
+    secret = b"API_KEY=placeholder-credential-value\n"
+    file_text = await read_file_text(secret, "application/octet-stream", "notes.pdf")
+    assert file_text.text == secret.decode()
+
+
+async def test_an_image_alone_carries_no_note_and_is_not_checked() -> None:
+    client = _ContentTrustClient()
+    verdict = await check_attachments(
+        client,  # type: ignore[arg-type]
+        role="user",
+        files=[(b"\x89PNG", "cat.png", "image/png")],
+        room_id="room-1",
+    )
+    assert verdict == AttachmentsVerdict()
+    assert client.checked == []
+
+
+async def test_an_image_still_blocks_when_unchecked_files_are_not_relayed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(attachments, "RELAY_UNCHECKED_FILES", False)
+    verdict = await check_attachments(
+        _ContentTrustClient(),  # type: ignore[arg-type]
+        role="user",
+        files=[(b"\x89PNG", "cat.png", "image/png")],
+        room_id="room-1",
+    )
+    assert verdict.blocked
+    assert "cat.png could not be checked" in verdict.block_reasons[0]
 
 
 def test_long_text_is_cut_to_the_limit() -> None:
@@ -126,6 +183,7 @@ async def test_unreadable_flagged_and_long_files_each_carry_a_note() -> None:
         role="assistant",
         files=[
             (b"\x89PNG", "cat.png", "image/png"),
+            (b"%PDF-1.4\x00garbage", "scan.pdf", "application/pdf"),
             (b"FLAG", "f.txt", "text/plain"),
             (b"b" * (TRUST_FILE_TEXT_LIMIT + 1), "long.log", "text/plain"),
         ],
@@ -134,7 +192,9 @@ async def test_unreadable_flagged_and_long_files_each_carry_a_note() -> None:
     assert not verdict.blocked
     assert verdict.flagged
     notes = "\n".join(verdict.notes)
-    assert "did not check cat.png" in notes
+    assert "did not check scan.pdf (this PDF could not be read)" in notes
+    # An image is a kind Switch never reads, so it carries no note.
+    assert "cat.png" not in notes
     assert "flagged f.txt" in notes
     assert (
         "checked only the first 20,000 characters of long.log; the rest was not checked"
@@ -300,7 +360,7 @@ def test_a_word_document_is_recognised_by_extension_alone() -> None:
 @pytest.mark.parametrize(
     "data",
     [
-        b"PK\x03\x04 not really a zip",
+        b"PK\x03\x04\x00 not really a zip",
         # A zip without a document body is not a Word document.
         _docx("x").replace(b"word/document.xml", b"word/documenX.xml"),
         # Nor is one whose package names a body it does not contain.
@@ -331,19 +391,18 @@ def test_a_word_document_declaring_a_dtd_is_refused() -> None:
     assert file_text.text is None
 
 
-def test_a_word_document_body_larger_than_the_budget_is_not_opened(
+def test_a_word_document_body_larger_than_the_budget_is_checked_up_to_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A highly compressible document (a zip bomb, in the limit) is refused
-    # from its declared size, before anything is inflated.
+    # A highly compressible body (a zip bomb, in the limit) is inflated only
+    # up to the budget, whatever size it declares, and that much is checked.
     monkeypatch.setattr(file_text_module, "_DOCX_XML_BYTE_BUDGET", 2_000)
     file_text = extract_file_text(
-        _docx("early text", padding=100_000), _DOCX_TYPE, "bomb.docx"
+        _docx("API_KEY=early", padding=100_000), _DOCX_TYPE, "bomb.docx"
     )
-    assert file_text.text is None
-    assert file_text.unreadable_reason == (
-        "this Word document is larger than Switch Trust reads"
-    )
+    assert file_text.text is not None
+    assert "API_KEY=early" in file_text.text
+    assert file_text.checked_part == "the first part"
 
 
 def test_a_header_past_the_budget_is_named_as_not_checked(
@@ -468,7 +527,7 @@ def test_a_scanned_pdf_with_no_text_is_unchecked_not_clean() -> None:
 
 
 def test_a_malformed_pdf_is_unchecked_not_an_error() -> None:
-    file_text = extract_file_text(b"%PDF-1.4 garbage", "application/pdf", "x.pdf")
+    file_text = extract_file_text(b"%PDF-1.4\x00garbage", "application/pdf", "x.pdf")
     assert file_text.unreadable_reason == "this PDF could not be read"
 
 
