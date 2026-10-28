@@ -25,6 +25,7 @@ from switch_core.bridges.agent.protocol.agent_connections import (
     UnfencedBeatError,
     UnknownConnectionError,
 )
+from switch_core.bridges.agent.protocol.liveness import HEARTBEAT_INTERVAL_SECONDS
 from switch_core.bridges.agent.protocol.positions import OWN_EVENTS
 
 AGENT = "agent-1"
@@ -623,3 +624,8 @@ def test_the_one_number_a_client_is_told_is_a_ticket_only_where_it_has_to_be() -
     assert holds_position.cursor == 7
     assert one_number.cursor == 2**48 + 5
     assert own_events_only.cursor == 7
+
+
+def test_the_ttl_survives_two_lost_beats() -> None:
+    """One dropped or late beat must never cost a connection."""
+    assert HEARTBEAT_TTL_SECONDS >= 3 * HEARTBEAT_INTERVAL_SECONDS
