@@ -128,6 +128,7 @@ WORKSPACE_TABLES: dict[str, Handling] = {
     "service_token_issuances": "deleted",
     "session_activity_items": "deleted",
     "tasks": "deleted",
+    "template_install_resources": "deleted",
     "tools": "deleted",
     "turn_status_posts": "deleted",
     # The workspace's own setup, and what the person deleting it holds in it.
@@ -136,6 +137,7 @@ WORKSPACE_TABLES: dict[str, Handling] = {
     "invitations": "deleted",
     "provider_connections": "deleted",
     "sign_in_flows": "deleted",
+    "template_installs": "deleted",
     "tenant_data_moves": "deleted",
     "tenant_join_domains": "deleted",
     "tenant_usage": "deleted",
