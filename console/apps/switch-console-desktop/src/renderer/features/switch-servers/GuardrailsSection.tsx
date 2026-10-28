@@ -167,7 +167,7 @@ export const GuardrailsSection = observer(function GuardrailsSection({
               Every message this server sends is checked before it goes out once an endpoint and an
               API key are set, including the text inside attached files, of which only the first
               20,000 characters are checked. Files with no text to read, such as images and
-              archives, are sent with a note that they were not checked.
+              archives, are sent without being checked.
             </p>
             <FieldGroup>
               <Field>

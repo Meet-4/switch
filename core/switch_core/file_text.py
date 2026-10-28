@@ -127,12 +127,15 @@ class FileText:
     set when only the start of the file was read ("the first 20,000
     characters"), and `skipped` names the parts of it that could not be read
     at all (a Word document's embedded document), each for the note that
-    says so."""
+    says so. `textless` is set when the file is of a kind Switch never reads
+    text from (an image, an archive, a binary), as opposed to one it tried
+    and failed to read."""
 
     text: str | None
     checked_part: str | None = None
     unreadable_reason: str | None = None
     skipped: tuple[str, ...] = field(default=())
+    textless: bool = False
 
 
 def _unreadable(reason: str) -> FileText:
@@ -477,10 +480,11 @@ def extract_file_text(data: bytes, mimetype: str, filename: str) -> FileText:
     if as_text is not None:
         return as_text
     kind = normalise_mime_type(mimetype)
-    for prefix, reason in _TEXTLESS_KINDS:
-        if kind.startswith(prefix):
-            return _unreadable(reason)
-    return _unreadable("binary files cannot be checked")
+    reason = next(
+        (reason for prefix, reason in _TEXTLESS_KINDS if kind.startswith(prefix)),
+        "binary files cannot be checked",
+    )
+    return FileText(text=None, unreadable_reason=reason, textless=True)
 
 
 _worker_slots: weakref.WeakKeyDictionary[
@@ -545,6 +549,7 @@ async def _read_in_worker(kind: DocumentKind, data: bytes, filename: str) -> Fil
             checked_part=fields["checked_part"],
             unreadable_reason=fields["unreadable_reason"],
             skipped=tuple(fields["skipped"]),
+            textless=fields["textless"],
         )
     except (ValueError, KeyError, TypeError) as error:
         logger.warning(

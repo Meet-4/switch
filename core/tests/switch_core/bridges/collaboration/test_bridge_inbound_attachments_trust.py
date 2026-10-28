@@ -184,18 +184,35 @@ async def test_text_file_trust_would_redact_is_blocked_not_relayed() -> None:
     assert "cannot be redacted" in body
 
 
-async def test_image_is_relayed_with_a_note_that_it_was_not_checked() -> None:
+async def test_image_is_relayed_without_a_note_or_a_notice() -> None:
+    # Switch never reads an image's text, so a screenshot is relayed as it is:
+    # telling its sender so on every post would only be noise.
     bridge = _bridge(_ContentTrustClient())
 
     await CollaborationCore._handle_inbound_message(bridge, _msg("look", _IMAGE))
 
     [media] = bridge.human_actor.media
     assert media["filename"] == "cat.png"
+    assert media["caption"] == "look"
+    assert bridge._adapter.admin_messages == []
+
+
+async def test_unreadable_document_is_relayed_with_a_note_that_it_was_not_checked() -> (
+    None
+):
+    bridge = _bridge(_ContentTrustClient())
+    scan = Attachment(
+        filename="scan.pdf", mimetype="application/pdf", data=b"%PDF-1.4\x00garbage"
+    )
+
+    await CollaborationCore._handle_inbound_message(bridge, _msg("look", scan))
+
+    [media] = bridge.human_actor.media
     assert media["caption"].startswith("look\n\n")
-    assert "Switch Trust did not check cat.png" in media["caption"]
+    assert "Switch Trust did not check scan.pdf" in media["caption"]
     # The sender sees the note too, since the room never echoes their post back.
     [(body, message_type)] = bridge._adapter.admin_messages
-    assert "did not check cat.png" in body
+    assert "did not check scan.pdf" in body
     assert message_type == AdminMessageType.TRUST_ERRORED.value
 
 

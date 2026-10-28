@@ -55,9 +55,11 @@ version of their own to them without also giving them a release of their own.
   reaches the room. If the text or any file is blocked, nothing from the
   message is delivered and the sender is told why. A file whose text Switch
   Trust would redact blocks the message too, since a file cannot be redacted
-  safely. Files with no text to read, such as images, archives, scanned or
-  encrypted PDFs and files that cannot be opened, are still delivered, with a
-  note on the message saying Switch Trust did not check them. Only the first
+  safely. Files with no text to read, such as images, archives and other
+  binaries, are delivered without a check or a note, since Switch never reads
+  their kind. Scanned or encrypted PDFs and files that cannot be opened are
+  delivered with a note on the message saying Switch Trust did not check
+  them. Only the first
   20,000 characters of a file are checked (and at most 200 pages of a PDF):
   anything past that reaches agents unchecked, and the message carries a note
   saying the rest was not checked. switch-core now depends on `pypdf` to read
@@ -2074,7 +2076,7 @@ version of their own to them without also giving them a release of their own.
 #### Changed
 - **The Switch Trust settings say what is checked in attached files.** The
   text inside a file is checked up to its first 20,000 characters; files with
-  no text to read, such as images, are sent with a note that they were not
+  no text to read, such as images and archives, are sent without being
   checked.
 - **Managed agents and machines update when the server says they changed.**
   Against a server that pushes change notices, Console reads those lists

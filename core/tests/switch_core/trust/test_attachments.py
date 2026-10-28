@@ -15,6 +15,7 @@ from switch_core.file_text import read_file_text
 from switch_core.trust import attachments
 from switch_core.trust.attachments import (
     TRUST_FILE_TEXT_LIMIT,
+    AttachmentsVerdict,
     check_attachments,
     extract_file_text,
 )
@@ -115,6 +116,32 @@ async def test_text_named_as_a_document_is_checked_through_the_worker() -> None:
     assert file_text.text == secret.decode()
 
 
+async def test_an_image_alone_carries_no_note_and_is_not_checked() -> None:
+    client = _ContentTrustClient()
+    verdict = await check_attachments(
+        client,  # type: ignore[arg-type]
+        role="user",
+        files=[(b"\x89PNG", "cat.png", "image/png")],
+        room_id="room-1",
+    )
+    assert verdict == AttachmentsVerdict()
+    assert client.checked == []
+
+
+async def test_an_image_still_blocks_when_unchecked_files_are_not_relayed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(attachments, "RELAY_UNCHECKED_FILES", False)
+    verdict = await check_attachments(
+        _ContentTrustClient(),  # type: ignore[arg-type]
+        role="user",
+        files=[(b"\x89PNG", "cat.png", "image/png")],
+        room_id="room-1",
+    )
+    assert verdict.blocked
+    assert "cat.png could not be checked" in verdict.block_reasons[0]
+
+
 def test_long_text_is_cut_to_the_limit() -> None:
     file_text = extract_file_text(
         b"a" * (TRUST_FILE_TEXT_LIMIT + 5), "text/plain", "big.log"
@@ -156,6 +183,7 @@ async def test_unreadable_flagged_and_long_files_each_carry_a_note() -> None:
         role="assistant",
         files=[
             (b"\x89PNG", "cat.png", "image/png"),
+            (b"%PDF-1.4\x00garbage", "scan.pdf", "application/pdf"),
             (b"FLAG", "f.txt", "text/plain"),
             (b"b" * (TRUST_FILE_TEXT_LIMIT + 1), "long.log", "text/plain"),
         ],
@@ -164,7 +192,9 @@ async def test_unreadable_flagged_and_long_files_each_carry_a_note() -> None:
     assert not verdict.blocked
     assert verdict.flagged
     notes = "\n".join(verdict.notes)
-    assert "did not check cat.png" in notes
+    assert "did not check scan.pdf (this PDF could not be read)" in notes
+    # An image is a kind Switch never reads, so it carries no note.
+    assert "cat.png" not in notes
     assert "flagged f.txt" in notes
     assert (
         "checked only the first 20,000 characters of long.log; the rest was not checked"
