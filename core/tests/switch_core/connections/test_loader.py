@@ -12,7 +12,6 @@ from switch_core.connections.loader import (
 
 PLACEHOLDERS = {
     "asana",
-    "gitlab",
     "bitbucket",
     "microsoft-365",
     "new-relic",
@@ -31,6 +30,7 @@ def test_shipped_catalog_enables_github_airtable_atlassian_datadog_and_google_wo
         "airtable",
         "atlassian",
         "datadog",
+        "gitlab",
         "google-workspace",
     }
     assert [slug for slug, entry in CATALOG.items() if entry.definition.enabled] == [
@@ -38,12 +38,14 @@ def test_shipped_catalog_enables_github_airtable_atlassian_datadog_and_google_wo
         "atlassian",
         "datadog",
         "github",
+        "gitlab",
         "google-workspace",
     ]
     assert all(not CATALOG[slug].skill_files for slug in PLACEHOLDERS)
     assert "SKILL.md" in CATALOG["github"].skill_files
     assert "SKILL.md" in CATALOG["airtable"].skill_files
     assert "SKILL.md" in CATALOG["atlassian"].skill_files
+    assert "SKILL.md" in CATALOG["gitlab"].skill_files
     assert "SKILL.md" in CATALOG["google-workspace"].skill_files
 
 
@@ -173,6 +175,40 @@ def test_the_shipped_atlassian_entry_signs_in_as_the_spike_found_it_must():
     assert not any(":rovo:" in scope or ":twg" in scope for scope in every)
     assert definition.auth.identity is not None
     assert definition.auth.identity.url == "https://api.atlassian.com/me"
+
+
+def test_the_shipped_gitlab_entry_signs_in_as_the_metadata_says_it_must():
+    definition = CATALOG["gitlab"].definition
+    oauth = definition.auth.oauth
+    assert oauth is not None
+    assert (definition.adapter, oauth.registration, oauth.redirect) == (
+        "oauth",
+        "dynamic",
+        ["loopback"],
+    )
+    assert oauth.loopback_ports is not None and len(oauth.loopback_ports) >= 3
+    # GitLab has no consent prompt of its own: it shows its own page.
+    assert oauth.prompt is None
+    assert oauth.revocation_discovered is True
+    assert definition.auth.refresh == "rotating"
+    assert definition.token is not None
+    assert (definition.token.kind, definition.token.max_lifetime) == (
+        "pass_through",
+        2 * 3600,
+    )
+    assert definition.mcp is not None
+    assert [(s.name, s.url) for s in definition.mcp.servers] == [
+        ("gitlab", "https://gitlab.com/api/v4/mcp")
+    ]
+    assert definition.access is not None and definition.access.write is not None
+    read_scopes = definition.access.read.scopes
+    assert read_scopes == ["mcp", "read_api", "read_user"]
+    assert definition.access.write.scopes == ["mcp", "api", "read_user"]
+    # `api` is what lets a write grant change anything: a read grant that named
+    # it would be a write grant wearing another name.
+    assert "api" not in read_scopes
+    assert definition.auth.identity is not None
+    assert definition.auth.identity.url == "https://gitlab.com/api/v4/user"
 
 
 def test_the_shipped_airtable_entry_signs_in_as_the_spike_found_it_must():

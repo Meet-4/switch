@@ -1,7 +1,40 @@
 slug: gitlab
 name: GitLab
 category: Source control
-description: Work with GitLab projects, merge requests and issues.
-enabled: false
+description: Read and update GitLab projects, issues, merge requests and pipelines, as you.
+enabled: true
+adapter: oauth
 auth:
   type: oauth
+  # GitLab invalidates both the access and the refresh token on every refresh,
+  # so two refreshes must never race.
+  refresh: rotating
+  oauth:
+    # GitLab registers the client itself: its authorization server advertises
+    # registration_endpoint, and its MCP server requires a `mcp`-scoped token.
+    registration: dynamic
+    # The client is registered against Switch Console's loopback listener, so
+    # the browser comes back there and Core exchanges the code.
+    redirect: [loopback]
+    loopback_ports: [39231, 39232, 39233, 39234, 39235]
+    revocation_discovered: true
+  identity:
+    url: https://gitlab.com/api/v4/user
+    account_id: id
+    label: username
+# GitLab's OAuth access tokens carry expires_in 7200, and a refreshed one is
+# minted only when GitLab hands back a new refresh token.
+token: { kind: pass_through, max_lifetime: 7200 }
+mcp:
+  servers:
+    - { name: gitlab, url: "https://gitlab.com/api/v4/mcp" }
+access:
+  # The MCP server itself requires the `mcp` scope, and its tools then call the
+  # REST API with the same token: `read_api` is what makes a read grant
+  # read-only, and `api` is what lets a write grant change anything. `read_user`
+  # covers the identity call above.
+  read:
+    scopes: [mcp, read_api, read_user]
+  write:
+    scopes: [mcp, api, read_user]
+tools: { mode: pass_through }
