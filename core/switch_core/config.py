@@ -754,8 +754,9 @@ class SwitchConfig(BaseSettings):
     # (`open_gate.py`). Opening one takes dozens of transactions from the same
     # pool the process's requests and its lease renewal use, and when a pod
     # goes away every agent it held opens on the pods left within seconds.
-    # Past this many, an open waits briefly and is then told when to come back,
-    # in the order it arrived, instead of queueing on the pool. 0 turns it off.
+    # Past this many, as many again wait for a slot and the rest are told when
+    # to come back, in the order they arrived, at the pace opens are taking
+    # here, instead of queueing on the pool. 0 turns it off.
     agent_open_limit: int = 8
 
     # Resolving a bearer token to its agent is the highest-frequency query in

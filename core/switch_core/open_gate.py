@@ -9,15 +9,22 @@ deleted), the opens took the whole pool: thousands of pool timeouts, opens
 that failed after their incarnation was made, and the surviving pod's lease
 lapsing, which made it drop agents of its own.
 
-This middleware lets at most `limit` opens run at once in this process. An
-open that finds every slot taken waits up to `WAIT_S` for one. Past that, or
-when `MAX_WAITING` opens are waiting already, it is refused before
-authentication or the database, with `retry_after_s`: a time this process hands
-out in order, one slot after another, so a storm comes back spread over the
-time the process needs to take it rather than all at once. The slots are as far
-apart as opens are taking here, so the queue slows down when the database
-does. A caller refused again before its time is given the same time, not a
-new one, so a client that retries at once cannot push everyone else's back.
+This middleware runs at most `limit` opens at once in this process, and takes
+every other number it needs from how long opens take here. An open that finds
+every slot taken waits for one, in arrival order, if fewer than `limit` opens
+are waiting already: those get the next slots to free, each within about the
+time one open takes. Any other open is refused before authentication or the
+database, with `retry_after_s`, its place in the line. A slot frees every
+median open time over `limit` (the median of the last `limit` opens), so a
+storm comes back spread over the time the process needs to take it, and the
+line slows down when the database does. Until one open has finished there is
+nothing to measure, so no open is refused; when the first finishes, the opens
+waiting past the first `limit` are told their times.
+
+A caller refused again before its time keeps that time, so a client that
+retries at once cannot push everyone else's back, and a caller back at or
+after its time waits for a slot even when `limit` are waiting, so the opens
+that arrived since cannot push it back either.
 
 An open is done when its first frame or response body goes out (the
 `connection_state`, or a refusal) or the request ends. What follows is the
@@ -28,37 +35,32 @@ own: each pod paces its own opens, as each has its own pool.
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import contextlib
+import itertools
 import json
 import logging
 import math
 import random
 import re
-from collections import OrderedDict
+import statistics
+from collections import OrderedDict, deque
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from switch_core.observability.catalogue import AGENT_OPENS_DEFERRED
 from switch_core.observability.metrics import metrics
+from switch_core.refusal_breaker import bearer_caller
 
 logger = logging.getLogger(__name__)
 
-# How long an open waits for a slot before it is told to come back later.
-WAIT_S = 2.0
-# Opens waiting for a slot at once; past this, refused without waiting.
-MAX_WAITING = 64
-# The earliest and latest time a refused open is told to come back in.
-MIN_RETRY_S = 1.0
+# The gate answers before authentication, so a caller that never authenticates
+# takes a place in the line too. These bound what such callers can cost: how
+# far back they push the times real callers are given, and the memory their
+# places take.
 MAX_RETRY_S = 300.0
-# What an open is taken to cost before any has finished here, and the weight
-# each finished one gets in the running average.
-FIRST_OPEN_S = 0.25
-OPEN_S_WEIGHT = 0.2
-# Bounds the memory callers retrying with fresh tokens can take.
 MAX_TRACKED = 10_000
-# The most often a summary of refused opens is logged.
-LOG_EVERY_S = 10.0
 
 BUSY = "busy"
 _STATUS = 503
@@ -87,6 +89,14 @@ def _route(scope: Scope) -> str | None:
     return None
 
 
+@dataclass(eq=False)
+class _Waiter:
+    caller: str | None
+    # Set to None when a slot is handed to this open, or to when it is to come
+    # back, in seconds.
+    told: asyncio.Future[float | None]
+
+
 class OpenGate:
     def __init__(
         self,
@@ -100,23 +110,27 @@ class OpenGate:
         self.limit = limit
         self._clock = clock
         self._rand = rand
-        self._slots = asyncio.Semaphore(max(limit, 1))
-        self._waiting = 0
-        self._open_s = FIRST_OPEN_S
+        self._slots = max(limit, 1)
+        self._running = 0
+        self._waiting: deque[_Waiter] = deque()
+        # How long the last `limit` opens took, from taking a slot to their
+        # first frame or response.
+        self._open_s: deque[float] = deque(maxlen=self._slots)
+        # The end of the line of callers told when to come back.
         self._next_at = 0.0
         self._given: OrderedDict[str, float] = OrderedDict()
-        self._deferred = 0
-        self._logged_at = 0.0
+        self._refusing_since: float | None = None
+        self._refused = 0
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         route = _route(scope) if self.limit > 0 else None
         if route is None:
             await self.app(scope, receive, send)
             return
-        if not await self._enter():
-            retry_after_s = self._retry_after(_caller(scope))
+        retry_after_s = await self._enter(bearer_caller(scope))
+        if retry_after_s is not None:
             metrics().increment(AGENT_OPENS_DEFERRED, {"route": route})
-            self._note_deferred(retry_after_s)
+            self._note_refused(retry_after_s)
             await _refuse(scope, receive, send, retry_after_s)
             return
 
@@ -125,12 +139,9 @@ class OpenGate:
 
         def release() -> None:
             nonlocal released
-            if released:
-                return
-            released = True
-            took = max(self._clock() - started, 0.0)
-            self._open_s += OPEN_S_WEIGHT * (took - self._open_s)
-            self._slots.release()
+            if not released:
+                released = True
+                self._release(max(self._clock() - started, 0.0))
 
         async def done_on_first_output(message: Message) -> None:
             if message["type"] in (
@@ -146,36 +157,77 @@ class OpenGate:
         finally:
             release()
 
-    async def _enter(self) -> bool:
-        if not self._slots.locked():
-            await self._slots.acquire()
-            return True
-        if self._waiting >= MAX_WAITING:
-            return False
-        self._waiting += 1
-        try:
-            async with asyncio.timeout(WAIT_S):
-                await self._slots.acquire()
-            return True
-        except TimeoutError:
-            return False
-        finally:
-            self._waiting -= 1
-
-    def _retry_after(self, caller: str | None) -> float:
-        """The next free slot in this process's queue, as seconds from now.
-
-        Slots are `open_s / limit` apart: how long an open takes here, over how
-        many run at once. A caller already given a time that has not come is
-        given the same one."""
+    async def _enter(self, caller: str | None) -> float | None:
+        """Take a slot, waiting for one when this open is near enough the front
+        of the line. None once the open holds a slot; otherwise when it is to
+        come back, in seconds."""
         now = self._clock()
+        if self._running < self._slots and not self._waiting:
+            self._running += 1
+            self._forget(caller)
+            return None
+        given = self._given.get(caller) if caller is not None else None
+        back_in_time = given is not None and given <= now
+        if self._open_s and len(self._waiting) >= self._slots and not back_in_time:
+            return self._retry_after(caller, now)
+
+        waiter = _Waiter(caller, asyncio.get_running_loop().create_future())
+        self._waiting.append(waiter)
+        try:
+            told = await waiter.told
+        except asyncio.CancelledError:
+            if waiter.told.cancelled():
+                with contextlib.suppress(ValueError):
+                    self._waiting.remove(waiter)
+            elif waiter.told.result() is None:
+                # Handed a slot as the request went away: the next one has it.
+                self._pass_slot()
+            raise
+        if told is None:
+            self._forget(caller)
+        return told
+
+    def _release(self, took: float) -> None:
+        first = not self._open_s
+        self._open_s.append(took)
+        if first:
+            self._tell_the_line()
+        self._pass_slot()
+        self._note_line_through()
+
+    def _pass_slot(self) -> None:
+        while self._waiting:
+            waiter = self._waiting.popleft()
+            if not waiter.told.done():
+                waiter.told.set_result(None)
+                return
+        self._running -= 1
+
+    def _tell_the_line(self) -> None:
+        """Tell the opens that waited past the first `limit`, while there was
+        nothing to measure yet, when to come back."""
+        self._waiting = deque(w for w in self._waiting if not w.told.done())
+        past = list(itertools.islice(self._waiting, self._slots, None))
+        for _ in past:
+            self._waiting.pop()
+        now = self._clock()
+        for waiter in past:
+            waiter.told.set_result(self._retry_after(waiter.caller, now))
+
+    def _retry_after(self, caller: str | None, now: float) -> float:
+        """When this caller is to come back, in seconds: its place in the line.
+
+        A slot frees every median open time over `limit`. The first caller told
+        to come back is behind the opens waiting here, each one after it a slot
+        later, at a random point within its slot. A caller already given a time
+        that has not come keeps it."""
         if caller is not None:
             at = self._given.get(caller)
             if at is not None and at > now:
                 self._given.move_to_end(caller)
-                return max(at - now, MIN_RETRY_S)
-        spacing = self._open_s / max(self.limit, 1)
-        start = max(now + MIN_RETRY_S, self._next_at)
+                return at - now
+        spacing = statistics.median(self._open_s) / self._slots
+        start = max(now + (len(self._waiting) + 1) * spacing, self._next_at)
         self._next_at = start + spacing
         at = min(start + spacing * self._rand(), now + MAX_RETRY_S)
         if caller is not None:
@@ -185,28 +237,35 @@ class OpenGate:
                 self._given.popitem(last=False)
         return at - now
 
-    def _note_deferred(self, retry_after_s: float) -> None:
-        self._deferred += 1
-        now = self._clock()
-        if now - self._logged_at < LOG_EVERY_S:
+    def _forget(self, caller: str | None) -> None:
+        if caller is not None:
+            self._given.pop(caller, None)
+
+    def _note_refused(self, retry_after_s: float) -> None:
+        self._refused += 1
+        if self._refusing_since is not None:
             return
+        self._refusing_since = self._clock()
         logger.warning(
-            "Deferred %d connection open(s) since the last report: %d running "
-            "(the limit), %d waiting, the latest told to come back in %.1f s",
-            self._deferred,
-            self.limit,
-            self._waiting,
+            "Opening connections more slowly than they arrive: %d opening and %d "
+            "waiting for a slot, the rest told when to come back, the first in %.1f s",
+            self._running,
+            len(self._waiting),
             retry_after_s,
         )
-        self._deferred = 0
-        self._logged_at = now
 
-
-def _caller(scope: Scope) -> str | None:
-    for name, value in scope.get("headers", []):
-        if name == b"authorization" and value.lower().startswith(b"bearer "):
-            return hashlib.sha256(value[7:].strip()).hexdigest()
-    return None
+    def _note_line_through(self) -> None:
+        now = self._clock()
+        if self._refusing_since is None or self._waiting or self._next_at > now:
+            return
+        logger.warning(
+            "Caught up with connection opens: %d were told to come back later "
+            "over %.0f s",
+            self._refused,
+            now - self._refusing_since,
+        )
+        self._refusing_since = None
+        self._refused = 0
 
 
 async def _refuse(
@@ -214,10 +273,11 @@ async def _refuse(
 ) -> None:
     """Refuse the open in the form its client reads refusals in, with when to
     come back."""
-    seconds = round(retry_after_s, 1)
+    # Rounded up to the millisecond clients wait in, so none comes back early.
+    seconds = math.ceil(retry_after_s * 1000) / 1000
     message = (
         "This server is opening as many connections as it can take right now. "
-        f"Open again in {seconds} s."
+        f"Open again in {seconds:g} s."
     )
     path = scope.get("path", "")
     if scope["type"] == "websocket":
