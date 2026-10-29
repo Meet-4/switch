@@ -10,29 +10,44 @@ auth:
   # so two refreshes must never race.
   refresh: rotating
   oauth:
-    # GitLab registers the client itself: its authorization server advertises
-    # registration_endpoint, and its MCP server requires a `mcp`-scoped token.
-    registration: dynamic
-    # The client is registered against Switch Console's loopback listener, so
-    # the browser comes back there and Core exchanges the code.
-    redirect: [loopback]
-    loopback_ports: [39231, 39232, 39233, 39234, 39235]
-    revocation_discovered: true
+    # GitLab offers dynamic registration, but not enough of it: measured on
+    # 2026-10-29, POST https://gitlab.com/oauth/register answers scope "mcp"
+    # and grant_types ["authorization_code"] whatever the request asks for.
+    # An `mcp`-only token cannot read the user, so nobody could finish a
+    # sign-in, and with no refresh grant a token would die after two hours
+    # with the person sent back to the browser. So each server's operator
+    # registers a GitLab application, with the scopes mcp, read_api and
+    # read_user (and api for write), and names its settings in
+    # GITLAB_CLIENT_CONFIG_PATH or saves it under Connectors in the dashboard.
+    registration: static
+    client_settings: GITLAB
+    # Back to Core's own https callback, as Google's: the server needs
+    # GATEWAY_PUBLIC_URL, and nothing listens on people's computers.
+    redirect: [core]
+    # GitLab compares the redirect only once the person has signed in, so a
+    # client whose application names another address is found out late.
+    unchecked: >-
+      Switch can't check the redirect URI. Connect once to confirm.
+    authorization_url: https://gitlab.com/oauth/authorize
+    token_url: https://gitlab.com/oauth/token
+    revocation_url: https://gitlab.com/oauth/revoke
   identity:
     url: https://gitlab.com/api/v4/user
     account_id: id
     label: username
-# GitLab's OAuth access tokens carry expires_in 7200, and a refreshed one is
-# minted only when GitLab hands back a new refresh token.
+# GitLab's access tokens carry expires_in 7200, and a refreshed one is minted
+# only from the refresh token GitLab hands back.
 token: { kind: pass_through, max_lifetime: 7200 }
 mcp:
   servers:
     - { name: gitlab, url: "https://gitlab.com/api/v4/mcp" }
 access:
-  # The MCP server itself requires the `mcp` scope, and its tools then call the
-  # REST API with the same token: `read_api` is what makes a read grant
-  # read-only, and `api` is what lets a write grant change anything. `read_user`
-  # covers the identity call above.
+  # The MCP server needs a token carrying `mcp`, and its tools then call the
+  # REST API with that token: `read_api` is what keeps a read grant from
+  # writing, and `api` is what lets a write grant change anything. `read_user`
+  # covers the identity call above. GitLab does not document whether the MCP
+  # server hides its write tools from a token without `api`, so the levels
+  # differ by the REST scope the same token carries.
   read:
     scopes: [mcp, read_api, read_user]
   write:

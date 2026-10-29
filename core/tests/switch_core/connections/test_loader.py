@@ -177,19 +177,25 @@ def test_the_shipped_atlassian_entry_signs_in_as_the_spike_found_it_must():
     assert definition.auth.identity.url == "https://api.atlassian.com/me"
 
 
-def test_the_shipped_gitlab_entry_signs_in_as_the_metadata_says_it_must():
+def test_the_shipped_gitlab_entry_uses_an_app_the_operator_registers():
     definition = CATALOG["gitlab"].definition
     oauth = definition.auth.oauth
     assert oauth is not None
+    # Measured on 2026-10-29: GitLab's registration endpoint answers scope
+    # "mcp" and grant_types ["authorization_code"] however the request is
+    # written, so a dynamically registered client could not read the user and
+    # could not renew. The entry therefore names an operator's application.
     assert (definition.adapter, oauth.registration, oauth.redirect) == (
         "oauth",
-        "dynamic",
-        ["loopback"],
+        "static",
+        ["core"],
     )
-    assert oauth.loopback_ports is not None and len(oauth.loopback_ports) >= 3
-    # GitLab has no consent prompt of its own: it shows its own page.
-    assert oauth.prompt is None
-    assert oauth.revocation_discovered is True
+    assert oauth.client_settings == "GITLAB"
+    assert oauth.authorization_url == "https://gitlab.com/oauth/authorize"
+    assert oauth.token_url == "https://gitlab.com/oauth/token"
+    assert oauth.revocation_url == "https://gitlab.com/oauth/revoke"
+    # GitLab compares the redirect only after the person has signed in.
+    assert oauth.unchecked is not None and "redirect URI" in oauth.unchecked
     assert definition.auth.refresh == "rotating"
     assert definition.token is not None
     assert (definition.token.kind, definition.token.max_lifetime) == (
