@@ -344,8 +344,13 @@ class ChatService:
     ) -> bool:
         if room.owner_id is not None and room.owner_id == user.id:
             return True
-        role = await self._user_store.tenant_role(session, tenant_id, user.id)
-        return administers_tenant(is_operator=user.role == "admin", tenant_role=role)
+        return administers_tenant(
+            is_operator=user.role == "admin",
+            tenant_role=await self._user_store.tenant_role(session, tenant_id, user.id),
+            organization_role=await self._user_store.organization_role(
+                session, tenant_id, user.id
+            ),
+        )
 
     async def _require_manager(
         self, session: AsyncSession, tenant_id: str, user: User, room: Room
