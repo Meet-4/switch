@@ -175,6 +175,14 @@ right.
 
 - Nobody grants a role above their own. A Workspace Admin invites Workspace
   Admins and Members; only an Org Admin grants `org_admin`.
+- The organization role is held on its own, never derived from workspace
+  roles: deriving `org_admin` from Workspace Admin would make a workspace's
+  admin the admin of every other workspace too. Joining a workspace makes
+  someone a `member` of its organization if they are not one; changing or
+  removing their workspace membership leaves their organization role alone.
+  An Org Admin's admin rights over a workspace come from the organization,
+  so the workspace members page refuses to demote or remove an Org Admin and
+  points to the organization's members instead.
 - The last Org Admin of an organization cannot be demoted or removed: 409,
   as the last Workspace Admin is refused today. Account deletion refuses the
   last Org Admin of an organization with other members.
