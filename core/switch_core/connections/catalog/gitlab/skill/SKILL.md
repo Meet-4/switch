@@ -15,8 +15,9 @@ Your owner granted this agent their GitLab connection. Its tools are on the
   as done by them.
 - **gitlab.com only.** Self-managed GitLab is not part of this connection.
 - **Read or write is your owner's choice, made when they connected.** On a
-  read-only grant the tools that change something are refused: tell the user
-  you can only read, rather than looking for another way.
+  read-only grant, tools that change something are refused — by Switch, or by
+  GitLab itself. Tell the user you can only read, rather than looking for
+  another way.
 - Projects are named by their full path, `group/project`, and their ids are
   numbers. Prefer the path the user gave you, and search when they gave
   neither.
